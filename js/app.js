@@ -2,16 +2,18 @@ import { CONFIG } from './config.js';
 import { store } from './store.js';
 import { getClientId, setClientId, getToken, login, logout, handleRedirect, redirectUri } from './auth.js';
 import {
-  AuthError, isAllowedHost, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
+  AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
+  fetchGuild, fetchGuildReports, fetchGuildAttendance, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
+import { summarizeGuild, summarizeAttendance } from './guild.js';
 import { analyzePlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
-  fmtTime, fmtNum, fmtPct,
+  fmtTime, fmtDuration, fmtNum, fmtPct,
 } from './analysis.js';
 import { classColor } from './mop.js';
 import { roleOf } from './cooldowns.js';
@@ -28,7 +30,9 @@ function route() {
   const p = new URLSearchParams(location.hash.slice(1));
   const num = (k) => (p.get(k) ? Number(p.get(k)) : null);
   const host = (p.get('h') || '').toLowerCase();
-  return { code: p.get('r'), host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p') };
+  const guild = p.get('g') ? { id: Number(p.get('g')) }
+    : p.get('gn') ? { name: p.get('gn'), server: p.get('gs') || '', region: p.get('gr') || '' } : null;
+  return { code: p.get('r'), guild, host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p') };
 }
 
 function href({ code, host, fight, player }) {
@@ -37,6 +41,15 @@ function href({ code, host, fight, player }) {
   if (fight != null && player != null) p.set('p', player);
   return `#${p}`;
 }
+
+function guildHref({ host, guild }) {
+  const p = guild.id != null
+    ? new URLSearchParams({ g: guild.id, h: host })
+    : new URLSearchParams({ gn: guild.name, gs: guild.server, gr: guild.region, h: host });
+  return `#${p}`;
+}
+
+const linkHref = (item) => (item.kind === 'guild' ? guildHref(item) : href(item));
 
 function playerLink(lk, id, r, fightId) {
   return `<a class="player-link" href="${href({ ...r, fight: fightId, player: id })}">${playerTag(lk, id)}</a>`;
@@ -188,14 +201,14 @@ document.addEventListener('error', (e) => {
 
 $('#link-form').addEventListener('submit', (e) => {
   e.preventDefault();
-  const parsed = parseReportLink($('#link-input').value);
+  const parsed = parseLink($('#link-input').value);
   if (!parsed) {
-    $('#link-input').setCustomValidity('That doesn\'t look like a Warcraft Logs report link.');
+    $('#link-input').setCustomValidity('That doesn\'t look like a Warcraft Logs report or guild link.');
     $('#link-input').reportValidity();
     return;
   }
   $('#link-input').value = '';
-  location.hash = href(parsed);
+  location.hash = linkHref(parsed);
 });
 $('#link-input').addEventListener('input', () => $('#link-input').setCustomValidity(''));
 
@@ -218,17 +231,23 @@ function renderHome() {
       <h1>Why did we wipe?</h1>
       <p>Paste a Warcraft Logs report link above. FableLogs goes through every boss pull and explains, in plain words, why each player died,
       what started each wipe, and who pulled without a flask, food or potion.</p>
+      <p>Paste a guild link instead for the guild's progression, raid-night trends and attendance.</p>
       ${getToken() ? '' : '<p><button id="hero-login">Connect Warcraft Logs</button> <span class="hint">You log in with your own Warcraft Logs account. Nothing is stored except in this browser.</span></p>'}
     </section>
-    ${recent.length ? `<section class="card"><h2>Recent reports</h2><ul class="recent">
-      ${recent.map((r) => `<li><a href="${href(r)}">${esc(r.title || r.code)}</a> <span class="muted">${esc(r.host)} · ${new Date(r.at).toLocaleDateString()}</span></li>`).join('')}
+    ${recent.length ? `<section class="card"><h2>Recent</h2><ul class="recent">
+      ${recent.map((r) => `<li>${r.kind === 'guild' ? '<span class="kind-tag">Guild</span>' : ''}<a href="${linkHref(r)}">${esc(r.title || r.code)}</a>
+        <span class="muted">${esc(r.host)} · ${new Date(r.at).toLocaleDateString()}</span></li>`).join('')}
     </ul></section>` : ''}`;
   $('#hero-login')?.addEventListener('click', startLogin);
 }
 
-function remember(r, report) {
-  const recent = store.get('fl.recent', []).filter((x) => x.code !== r.code);
-  recent.unshift({ code: r.code, host: r.host, title: report.title, at: Date.now() });
+// Recent list holds reports and guilds; a guild is keyed by its id once it has been looked up.
+function remember(item) {
+  const same = (x) => (item.kind === 'guild'
+    ? x.kind === 'guild' && x.guild?.id === item.guild.id
+    : x.kind !== 'guild' && x.code === item.code);
+  const recent = store.get('fl.recent', []).filter((x) => !same(x));
+  recent.unshift({ ...item, at: Date.now() });
   store.set('fl.recent', recent.slice(0, 10));
 }
 
@@ -269,7 +288,7 @@ function bindRefresh(r) {
 async function renderReport(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
-  remember(r, report);
+  remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
   const s = summarizeReport(report, deaths, lk);
   const fightIDs = (report.fights || []).map((f) => f.id);
   const [totals, prepData, zones] = fightIDs.length
@@ -469,7 +488,7 @@ function throughputCard(title, rows, lk, err, r, fight) {
 async function renderFight(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
-  remember(r, report);
+  remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
   const fight = (report.fights || []).find((f) => f.id === r.fight);
   if (!fight) throw new Error(`Fight ${r.fight} isn't a boss pull in this report.`);
 
@@ -561,7 +580,7 @@ const TIP_ICONS = { major: '!', minor: '•', info: 'i', good: '✓' };
 async function renderPlayer(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
-  remember(r, report);
+  remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
   const fight = (report.fights || []).find((f) => f.id === r.fight);
   if (!fight) throw new Error(`Fight ${r.fight} isn't a boss pull in this report.`);
   const actor = lk.actor(r.player);
@@ -640,6 +659,114 @@ async function renderPlayer(r) {
   bindRefresh(r);
 }
 
+// ---------- guild view ----------
+
+const GUILD_LIMITS = [10, 25, 50];
+
+function guildHeader(r, guild, limit) {
+  const where = [guild.server?.name, guild.server?.region?.slug?.toUpperCase(), guild.faction?.name].filter(Boolean).map(esc).join(' · ');
+  return `<section class="report-head">
+    <div class="report-title">
+      <nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">${esc(guild.name)}</span></nav>
+      <p class="muted">${where}</p>
+    </div>
+    <div class="head-actions">
+      <label class="select-label">Last
+        <select id="guild-limit">${GUILD_LIMITS.map((n) => `<option value="${n}"${n === limit ? ' selected' : ''}>${n} reports</option>`).join('')}</select>
+      </label>
+      <a class="button secondary" href="https://${esc(r.host)}/guild/id/${Number(guild.id)}" target="_blank" rel="noopener">Warcraft Logs ↗</a>
+      <button id="refresh" class="secondary" title="Fetch the latest reports from Warcraft Logs">Refresh</button>
+    </div>
+  </section>`;
+}
+
+function progressionHtml(r, gs) {
+  if (!gs.raids.length) return '<section class="card"><p class="muted">No boss pulls in these reports.</p></section>';
+  const fightLink = (k, label) => `<a href="${href({ code: k.code, host: r.host, fight: k.fightId })}">${label}</a>`;
+  return gs.raids.map((raid) => `<details class="raid" open>
+    <summary><span class="raid-name">${esc(raid.name)}</span>
+      <span class="muted">${raid.killed}/${raid.bosses.length} killed</span></summary>
+    <section class="card"><table class="table progression"><thead><tr>
+      <th>Boss</th><th>Status</th><th>First kill</th><th class="num">Pulls</th><th class="num">Wipes to kill</th><th class="num">Fastest</th><th class="num">Nights</th>
+    </tr></thead><tbody>
+    ${raid.bosses.map((b) => `<tr>
+      <td>${esc(b.label)}</td>
+      <td>${b.kills.length ? `<span class="badge kill">Killed${b.kills.length > 1 ? ` ×${b.kills.length}` : ''}</span>`
+        : `<span class="badge wipe">${b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : 'No kill'}</span>`}</td>
+      <td>${b.firstKill ? fightLink(b.firstKill, esc(new Date(b.firstKill.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))) : '<span class="muted">–</span>'}</td>
+      <td class="num">${b.pulls}</td>
+      <td class="num">${b.firstKill ? b.wipesBeforeKill : `<span class="muted">${b.wipesBeforeKill}+</span>`}</td>
+      <td class="num">${b.fastest ? fightLink(b.fastest, fmtTime(b.fastest.duration)) : '<span class="muted">–</span>'}</td>
+      <td class="num">${b.nights}</td>
+    </tr>`).join('')}
+    </tbody></table></section>
+  </details>`).join('');
+}
+
+function nightsHtml(r, gs) {
+  const rows = [...gs.nights].reverse();
+  return `<section class="card"><h2>Raid nights</h2>
+    <table class="table"><thead><tr><th>Date</th><th>Report</th><th>Raid</th><th class="num">Kills</th><th class="num">Wipes</th><th class="num">Boss time</th><th>First kills</th></tr></thead><tbody>
+    ${rows.map((n) => `<tr>
+      <td class="muted">${esc(new Date(n.startTime).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
+      <td><a href="${href({ code: n.code, host: r.host })}">${esc(n.title || n.code)}</a></td>
+      <td class="muted">${esc(n.zone)}</td>
+      <td class="num">${n.kills}</td>
+      <td class="num">${n.wipes}</td>
+      <td class="num">${fmtDuration(n.bossTime)}</td>
+      <td>${n.newKills.length ? `<span class="yes">${esc(n.newKills.join(', '))}</span>` : ''}</td>
+    </tr>`).join('')}
+    </tbody></table></section>`;
+}
+
+function attendanceHtml(att) {
+  if (!att) return '<section class="card"><p class="muted">Couldn\'t load attendance for this guild. Warcraft Logs only shares it for guilds with attendance tracking.</p></section>';
+  if (!att.rows.length) return '<section class="card"><p class="muted">No attendance recorded yet.</p></section>';
+  return `<section class="card"><h2>Attendance</h2>
+    <p class="hint">Share of the guild's last ${att.total} raids each player attended, from Warcraft Logs' attendance tracking. Benched counts as attended.</p>
+    <table class="table attendance"><thead><tr><th>Player</th><th class="num">Raids</th><th>Attendance</th><th class="num">Benched</th></tr></thead><tbody>
+    ${att.rows.map((p) => `<tr>
+      <td><span class="player" style="--cls:${classColor(p.type)}">${esc(p.name)}</span></td>
+      <td class="num">${p.present + p.benched} / ${att.total}</td>
+      <td><span class="meter"><span class="meter-fill ${p.pct >= 0.9 ? 'good' : p.pct >= 0.6 ? 'ok' : 'low'}" style="width:${(p.pct * 100).toFixed(0)}%"></span></span>
+        <span class="meter-val">${Math.round(p.pct * 100)}%</span></td>
+      <td class="num">${p.benched || ''}</td>
+    </tr>`).join('')}
+    </tbody></table></section>`;
+}
+
+async function renderGuild(r) {
+  setLoading('Loading guild…');
+  const guild = await fetchGuild(r.host, r.guild);
+  // A name/server link becomes an id link, so refreshes, bookmarks and cache keys use the id.
+  if (r.guild.id == null) history.replaceState(null, '', guildHref({ host: r.host, guild: { id: guild.id } }));
+  const saved = store.get('fl.guildLimit');
+  const limit = GUILD_LIMITS.includes(saved) ? saved : 25;
+
+  setLoading(`Loading ${guild.name}'s reports…`);
+  const [reports, attendance] = await Promise.all([
+    fetchGuildReports(r.host, guild.id, limit),
+    fetchGuildAttendance(r.host, guild.id, limit),
+  ]);
+  remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
+
+  const gs = summarizeGuild(reports);
+  const att = attendance ? summarizeAttendance(attendance) : null;
+
+  view.innerHTML = `
+    ${guildHeader(r, guild, limit)}
+    ${reports.length ? tabbed('fl.tab.guild', [
+    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>${progressionHtml(r, gs)}` },
+    { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs) },
+    { id: 'attendance', label: 'Attendance', html: attendanceHtml(att) },
+  ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}
+    ${rawBlock('guild', guild)}${rawBlock('reports', reports)}${rawBlock('attendance', attendance)}`;
+
+  bindTabs();
+  $('#guild-limit').addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });
+  $('#refresh').addEventListener('click', async () => { await clearReportCache(guildCachePrefix(guild.id)); render(); });
+}
+
 // ---------- boot ----------
 
 let renderSeq = 0;
@@ -647,9 +774,10 @@ async function render() {
   const seq = ++renderSeq;
   const r = route();
   try {
-    if (!r.code) { renderHome(); return; }
+    if (!r.code && !r.guild) { renderHome(); return; }
     if (!getToken()) throw new AuthError('Connect your Warcraft Logs account to load reports.');
-    if (r.fight != null && r.player != null) await renderPlayer(r);
+    if (r.guild) await renderGuild(r);
+    else if (r.fight != null && r.player != null) await renderPlayer(r);
     else if (r.fight != null) await renderFight(r);
     else await renderReport(r);
     if (seq === renderSeq) window.scrollTo(0, 0);

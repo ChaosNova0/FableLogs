@@ -29,6 +29,13 @@ export function fmtTime(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// Totals that can run past an hour: "3h 6m" rather than "186:34".
+export function fmtDuration(ms) {
+  if (ms < 3_600_000) return fmtTime(ms);
+  const mins = Math.round(ms / 60_000);
+  return `${Math.floor(mins / 60)}h ${mins % 60}m`;
+}
+
 export function fmtNum(n) {
   n = n || 0;
   if (n >= 1e6) return `${(n / 1e6).toFixed(2)}M`;
@@ -101,7 +108,7 @@ export function summarizeReport(report, deaths, lk) {
   const encList = [...encounters.values()];
   const killed = encList.filter((e) => e.kills.length).length;
   const wipes = encList.reduce((n, e) => n + e.wipes.length, 0);
-  takeaways.push(`${killed} of ${encList.length} bosses killed, ${wipes} wipe${wipes === 1 ? '' : 's'}, ${fmtTime(pullTime)} spent in boss fights.`);
+  takeaways.push(`${killed} of ${encList.length} bosses killed, ${wipes} wipe${wipes === 1 ? '' : 's'}, ${fmtDuration(pullTime)} spent in boss fights.`);
 
   const progression = encList.filter((e) => e.wipes.length >= 2 || (e.wipes.length && !e.kills.length))
     .sort((a, b) => b.wipes.length - a.wipes.length);

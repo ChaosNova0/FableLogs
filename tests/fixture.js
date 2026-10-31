@@ -132,11 +132,52 @@ const fightsIn = (q) => {
   return m ? m[1].split(',').map(Number) : null;
 };
 
+// ---------- guild: eight raid nights of MSV progression, then Heart of Fear ----------
+
+const GUILD = { id: 777, name: 'Fable', faction: { name: 'Alliance' }, server: { name: 'Mirage Raceway', slug: 'mirage-raceway', region: { slug: 'us' } } };
+// Per night: [encounterID, wipes, kill, killSeconds, bestWipePct]
+const NIGHT_PLAN = [
+  [[1395, 4, false, 0, 18]],
+  [[1395, 2, true, 330], [1390, 3, false, 0, 40]],
+  [[1395, 1, true, 310], [1390, 2, true, 390]],
+  [[1395, 0, true, 298], [1390, 1, true, 360], [1434, 5, false, 0, 22]],
+  [[1395, 0, true, 290], [1390, 0, true, 352], [1434, 4, false, 0, 9]],
+  [[1395, 0, true, 284], [1390, 0, true, 340], [1434, 3, true, 420], [1507, 3, false, 0, 30]],
+  [[1395, 0, true, 279], [1390, 0, true, 335], [1434, 1, true, 401], [1507, 2, false, 0, 12]],
+  [[1395, 0, true, 270], [1390, 0, true, 330], [1434, 0, true, 395], [1507, 1, true, 330]],
+];
+const GUILD_REPORTS = NIGHT_PLAN.map((plan, n) => {
+  const start = Date.UTC(2026, 8, 3 + Math.floor(n / 2) * 7 + (n % 2) * 2, 9, 30);
+  let t = 60_000;
+  let id = 1;
+  const fights = [];
+  for (const [enc, wipes, kill, killSecs, best] of plan) {
+    for (let w = 0; w < wipes; w++) {
+      const dur = 150_000 + w * 20_000;
+      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: false, bossPercentage: best + (wipes - 1 - w) * 7, startTime: t, endTime: t + dur, difficulty: 3, size: 10 });
+      t += dur + 90_000;
+    }
+    if (kill) {
+      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: true, bossPercentage: 0, startTime: t, endTime: t + killSecs * 1000, difficulty: 3, size: 10 });
+      t += killSecs * 1000 + 90_000;
+    }
+  }
+  const zone = plan.some(([enc]) => enc === 1507) ? HOF : MSV;
+  return { code: n === NIGHT_PLAN.length - 1 ? 'PreviewReport0001' : `GuildNight000${n + 1}xx`, title: `${zone.name} — night ${n + 1}`, startTime: start, endTime: start + t, zone, fights };
+}).reverse();
+const ATTENDANCE = GUILD_REPORTS.map((r, n) => ({
+  code: r.code, startTime: r.startTime, zone: r.zone,
+  players: PLAYERS.map(([id, name, cls]) => ({ name, type: cls, presence: (id === 9 && n % 3 === 0) ? 0 : (id === 5 && n % 4 === 1) ? 2 : (id === 10 && n > 4) ? 0 : 1 })),
+}));
+
 function respond(query, variables) {
   const rate = { rateLimitData: { limitPerHour: 3600, pointsSpentThisHour: 212, pointsResetIn: 1800 } };
   const fid = variables.f?.[0] ?? fightsIn(query)?.[0];
   const fight = FIGHTS.find((x) => x.id === fid);
   const wrap = (report) => ({ data: { reportData: { report } } });
+  if (query.includes('attendance(')) return { data: { guildData: { guild: { attendance: { data: ATTENDANCE.slice(0, variables.limit) } } } } };
+  if (query.includes('reports(guildID')) return { data: { reportData: { reports: { data: GUILD_REPORTS.slice(0, variables.limit) } } } };
+  if (query.includes('guildData')) return { data: { guildData: { guild: GUILD } } };
   if (query.includes('masterData')) return { data: { ...rate, reportData: { report: REPORT } } };
   if (query.includes('gameZone')) return wrap({ fights: FIGHTS.map((x) => ({ id: x.id, gameZone: ZONE_OF[x.encounterID] })) });
   if (/^\{\s*rateLimitData/.test(query.trim())) return { data: rate };

@@ -17,12 +17,34 @@ export function parseReportLink(input) {
   const s = String(input || '').trim();
   const url = s.match(/^(?:https?:\/\/)?((?:[a-z0-9-]+\.)?warcraftlogs\.com)\/reports\/([A-Za-z0-9]+)(.*)$/i);
   if (url) {
-    const host = url[1].toLowerCase().startsWith('warcraftlogs') ? `www.${url[1].toLowerCase()}` : url[1].toLowerCase();
+    const host = normalizeHost(url[1]);
     const fight = (url[3].match(/[?#&]fight=(\d+)/) || [])[1];
     return { host, code: url[2], fight: fight ? Number(fight) : null };
   }
   if (/^[A-Za-z0-9]{16}$/.test(s)) return { host: CONFIG.defaultHost, code: s, fight: null };
   return null;
+}
+
+const normalizeHost = (h) => (h.toLowerCase().startsWith('warcraftlogs') ? `www.${h.toLowerCase()}` : h.toLowerCase());
+
+// Guild pages: /guild/id/123, /guild/reports-list/123 (and other tabs), or /guild/us/server-slug/Guild%20Name.
+export function parseGuildLink(input) {
+  const s = String(input || '').trim();
+  const m = s.match(/^(?:https?:\/\/)?((?:[a-z0-9-]+\.)?warcraftlogs\.com)\/guilds?\/(?:[a-z-]+\/(\d+)(?:[/?#]|$)|([a-z]{2,4})\/([^/?#]+)\/([^/?#]+))/i);
+  if (!m) return null;
+  const host = normalizeHost(m[1]);
+  if (m[2]) return { host, guild: { id: Number(m[2]) } };
+  let name = m[5];
+  try { name = decodeURIComponent(name.replace(/\+/g, ' ')); } catch { /* keep as typed */ }
+  return { host, guild: { region: m[3].toLowerCase(), server: m[4].toLowerCase(), name } };
+}
+
+// A report or guild link, tagged with its kind.
+export function parseLink(input) {
+  const report = parseReportLink(input);
+  if (report) return { kind: 'report', ...report };
+  const guild = parseGuildLink(input);
+  return guild ? { kind: 'guild', ...guild } : null;
 }
 
 // The token is only ever sent to Warcraft Logs hosts, and links only ever point at them.
@@ -137,6 +159,49 @@ export async function fetchFightDetail(host, code, fight) {
     errors: Object.fromEntries(['combatants', 'interrupts', 'dispels', 'potions', 'damage', 'healing']
       .map((f) => [f, failed(f)]).filter(([, m]) => m)),
   };
+}
+
+// ---------- guilds ----------
+
+// Guild data changes as new logs come in, so its cache entries roll over every hour.
+const hourBucket = () => Math.floor(Date.now() / 3_600_000);
+export const guildCachePrefix = (id) => `guild-${id}`;
+
+// Looks a guild up by id or by region/server/name. Returns { id, name, faction, server }.
+export async function fetchGuild(host, ref) {
+  const byId = ref.id != null;
+  const { data } = await gql(host, `query ($id: Int, $name: String, $slug: String, $region: String) { ${RATE_FIELDS} guildData {
+    guild(id: $id, name: $name, serverSlug: $slug, serverRegion: $region) {
+      id name faction { name } server { name slug region { slug } }
+    } } }`,
+  byId ? { id: ref.id } : { name: ref.name, slug: ref.server, region: ref.region },
+  { cacheKey: byId ? `${guildCachePrefix(ref.id)}:info` : `guild-${ref.region}-${ref.server}-${ref.name}:info` });
+  const guild = data?.guildData?.guild;
+  if (!guild) throw new Error('Guild not found on Warcraft Logs. Check the link, or whether the guild is on this site (classic, fresh, retail…).');
+  return guild;
+}
+
+// The guild's latest reports with every boss pull in them, newest first.
+export async function fetchGuildReports(host, guildId, limit) {
+  const { data } = await gql(host, `query ($gid: Int!, $limit: Int) { reportData {
+    reports(guildID: $gid, limit: $limit) { data {
+      code title startTime endTime zone { id name }
+      fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size }
+    } } } }`, { gid: guildId, limit }, { cacheKey: `${guildCachePrefix(guildId)}:reports:${limit}:${hourBucket()}` });
+  return data?.reportData?.reports?.data || [];
+}
+
+// Attendance for the guild's recent raids. Returns null rather than failing the page.
+export async function fetchGuildAttendance(host, guildId, limit) {
+  try {
+    const { data } = await gql(host, `query ($gid: Int!, $limit: Int) { guildData { guild(id: $gid) {
+      attendance(limit: $limit) { data { code startTime zone { name } players { name type presence } } }
+    } } }`, { gid: guildId, limit }, { cacheKey: `${guildCachePrefix(guildId)}:attendance:${limit}:${hourBucket()}` });
+    return data?.guildData?.guild?.attendance?.data ?? null;
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return null;
+  }
 }
 
 // Which raid each boss pull was in, for logs that cover more than one raid. Kept out of fetchReport so

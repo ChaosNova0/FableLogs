@@ -11,7 +11,7 @@
   <header class="topbar">
     <a class="brand" href="#">Fable<span>Logs</span></a>
     <form id="link-form" class="link-form" autocomplete="off">
-      <input id="link-input" type="text" placeholder="Paste a Warcraft Logs report link" aria-label="Warcraft Logs report link">
+      <input id="link-input" type="text" placeholder="Paste a Warcraft Logs report or guild link" aria-label="Warcraft Logs report or guild link">
       <button type="submit">Analyse</button>
     </form>
     <div id="auth-area" class="auth-area"></div>
@@ -50,7 +50,7 @@
     import { installFixture } from "./fixture.js";
     installFixture();
     const tab = new URLSearchParams(location.search).get("tab");
-    if (tab) for (const k of ["fl.tab.report", "fl.tab.fight"]) localStorage.setItem(k, JSON.stringify(tab));
+    if (tab) for (const k of ["fl.tab.report", "fl.tab.fight", "fl.tab.guild"]) localStorage.setItem(k, JSON.stringify(tab));
     await import("../js/app.js");
   </script>
 </body>

@@ -251,6 +251,46 @@ check('raids: kill count', grouped[1].killed === 1 && grouped[1].pulls === 2);
 const single = groupByRaid([enc(1, 0, true), enc(2, 10, false)], () => null, "Mogu'shan Vaults");
 check('raids: no zone data falls back to report zone', single.length === 1 && single[0].name === "Mogu'shan Vaults", JSON.stringify(single));
 
+// ---------- Guild ----------
+const { summarizeGuild, summarizeAttendance } = await import('../js/guild.js');
+const { parseGuildLink, parseLink } = await import('../js/api.js');
+const gf = (id, enc, name, kill, start, secs, pct = 0) => ({ id, encounterID: enc, name, kill, bossPercentage: pct, startTime: start, endTime: start + secs * 1000, difficulty: 3 });
+const day = 86_400_000;
+const greports = [
+  { code: 'N3', title: 'Night 3', startTime: 3 * day, zone: { name: 'MSV' }, fights: [gf(1, 1, 'Stone Guard', true, 0, 250), gf(2, 2, 'Feng', true, 400000, 300)] },
+  { code: 'N1', title: 'Night 1', startTime: 1 * day, zone: { name: 'MSV' }, fights: [gf(1, 1, 'Stone Guard', false, 0, 150, 40), gf(2, 1, 'Stone Guard', false, 200000, 150, 12), gf(3, 1, 'Stone Guard', true, 400000, 330)] },
+  { code: 'N2', title: 'Night 2', startTime: 2 * day, zone: { name: 'MSV' }, fights: [gf(1, 1, 'Stone Guard', true, 0, 300), gf(2, 2, 'Feng', false, 400000, 200, 33), gf(3, 3, "Gara'jal", false, 700000, 100, 61)] },
+];
+const gsum = summarizeGuild(greports);
+const sg = gsum.bosses.find((b) => b.name === 'Stone Guard');
+check('guild: nights sorted oldest first', gsum.nights.map((n) => n.code).join() === 'N1,N2,N3');
+check('guild: wipes before first kill', sg.wipesBeforeKill === 2 && sg.kills.length === 3, JSON.stringify({ w: sg.wipesBeforeKill, k: sg.kills.length }));
+check('guild: first kill is night 1', sg.firstKill.code === 'N1');
+check('guild: fastest kill', sg.fastest.duration === 250000 && sg.fastest.code === 'N3');
+check('guild: new kills per night', gsum.nights[0].newKills.join() === 'Stone Guard' && gsum.nights[2].newKills.join() === 'Feng', JSON.stringify(gsum.nights.map((n) => n.newKills)));
+check('guild: unkilled best wipe', gsum.bosses.find((b) => b.name === "Gara'jal").bestWipe.pct === 61);
+check('guild: raids grouped', gsum.raids.length === 1 && gsum.raids[0].killed === 2 && gsum.raids[0].bosses.length === 3);
+check('guild: takeaway counts', gsum.takeaways[0].startsWith('3 raid nights since') && gsum.takeaways[0].includes('2 of 3 bosses killed'), gsum.takeaways[0]);
+check('guild: latest-night first kill takeaway', gsum.takeaways.some((t) => t.startsWith('First kills on the latest night') && t.includes('Feng')), JSON.stringify(gsum.takeaways));
+check('guild: progression takeaway', gsum.takeaways.some((t) => t.startsWith("Still working on Gara'jal: 1 pull over 1 night")), JSON.stringify(gsum.takeaways));
+check('guild: faster kills takeaway', gsum.takeaways.some((t) => t.includes('Stone Guard 5:30 → 4:10')), JSON.stringify(gsum.takeaways));
+
+const att = summarizeAttendance([
+  { code: 'a', players: [{ name: 'A', type: 'Mage', presence: 1 }, { name: 'B', type: 'Rogue', presence: 1 }] },
+  { code: 'b', players: [{ name: 'A', type: 'Mage', presence: 1 }, { name: 'B', type: 'Rogue', presence: 2 }] },
+  { code: 'c', players: [{ name: 'A', type: 'Mage', presence: 1 }, { name: 'B', type: 'Rogue', presence: 0 }] },
+]);
+check('attendance: totals', att.total === 3 && att.rows[0].name === 'A' && att.rows[0].pct === 1);
+check('attendance: benched counts', att.rows[1].benched === 1 && Math.abs(att.rows[1].pct - 2 / 3) < 1e-9);
+
+const g1 = parseGuildLink('https://classic.warcraftlogs.com/guild/id/123456');
+check('guild link: by id', g1?.host === 'classic.warcraftlogs.com' && g1.guild.id === 123456, JSON.stringify(g1));
+const g2 = parseGuildLink('https://classic.warcraftlogs.com/guild/us/mirage-raceway/Fable%20Hub');
+check('guild link: by name', g2?.guild.region === 'us' && g2.guild.server === 'mirage-raceway' && g2.guild.name === 'Fable Hub', JSON.stringify(g2));
+check('guild link: other tabs', parseGuildLink('classic.warcraftlogs.com/guild/reports-list/987')?.guild.id === 987);
+check('guild link: rejects other hosts', parseGuildLink('https://evil.example/guild/id/1') === null);
+check('parseLink: kinds', parseLink('https://classic.warcraftlogs.com/reports/AbCdEf1234567890')?.kind === 'report' && parseLink('https://classic.warcraftlogs.com/guild/id/5')?.kind === 'guild');
+
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
 </script>

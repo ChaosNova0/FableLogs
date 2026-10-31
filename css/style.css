@@ -310,6 +310,28 @@ input[type="text"] {
 .q-legendary { border-color: #ff8000; }
 .q-heirloom, .q-artifact { border-color: #e6cc80; }
 
+/* ---------- guild ---------- */
+
+.select-label { display: inline-flex; align-items: center; gap: .4rem; color: var(--muted); font-size: .9rem; }
+select {
+  font: inherit; color: var(--text); background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: var(--radius-sm); padding: .4rem .5rem;
+}
+.progression { table-layout: fixed; }
+.progression td { vertical-align: middle; overflow: hidden; text-overflow: ellipsis; }
+.progression th:first-child { width: 30%; }
+.progression th:nth-child(2) { width: 16%; }
+.meter { display: inline-block; width: 120px; height: 8px; background: var(--surface-2); border-radius: var(--radius-sm); overflow: hidden; vertical-align: middle; }
+.meter-fill { display: block; height: 100%; }
+.meter-fill.good { background: var(--kill); }
+.meter-fill.ok { background: var(--warn); }
+.meter-fill.low { background: var(--wipe); }
+.meter-val { margin-left: .5rem; font-variant-numeric: tabular-nums; color: var(--muted); font-size: .85rem; }
+.kind-tag {
+  font-size: .7rem; font-weight: 600; text-transform: uppercase; letter-spacing: .04em; color: var(--accent);
+  border: 1px solid currentColor; border-radius: var(--radius-sm); padding: 0 .3rem; margin-right: .5rem;
+}
+
 /* ---------- kudos ---------- */
 
 .kudos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: .6rem; }

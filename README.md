@@ -10,6 +10,8 @@ A static HTML5 site: paste a Warcraft Logs report link and get a plain-language 
   average item level, and a gear grid with Wowhead tooltips.
 - **Kudos:** per pull (top damage and healing, most interrupts and dispels, always casting, top parses, fully prepared,
   deathless kill or last standing) and for the night (never died, last standing most often, night-wide totals).
+- **Guilds:** paste a guild link (`/guild/id/123` or `/guild/us/server/Name`) for progression per raid (first kills,
+  wipes to kill, fastest kills), raid-night trends and attendance across the last 10, 25 or 50 reports.
 - **Per player:** active time, major cooldowns used vs. possible, overhealing, parse percentile, cast counts,
   and a ranked list of tips. Click any player on a pull page.
 
@@ -55,6 +57,7 @@ published; `tests/` is left out because the preview page writes a fake login tok
 | `js/analysis.js` | Rules that turn events into findings (no DOM, no network) |
 | `js/mop.js` | MoP potion names, flask and food detection, class colours |
 | `js/cooldowns.js` | Major cooldowns per class and spec, and role detection |
+| `js/guild.js` | Guild synopsis: progression, raid-night trends, attendance |
 | `js/performance.js` | Per-player breakdown: active time, cooldown usage, overheal, tips |
 | `js/specs/` | Spec-specific modules (rotation, uptimes), keyed `Class-Spec` |
 | `js/app.js` | Routing and rendering |
