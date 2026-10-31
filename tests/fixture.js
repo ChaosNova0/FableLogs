@@ -144,21 +144,21 @@ const NIGHT_PLAN = [
   [[1395, 0, true, 290], [1390, 0, true, 352], [1434, 4, false, 0, 9]],
   [[1395, 0, true, 284], [1390, 0, true, 340], [1434, 3, true, 420], [1507, 3, false, 0, 30]],
   [[1395, 0, true, 279], [1390, 0, true, 335], [1434, 1, true, 401], [1507, 2, false, 0, 12]],
-  [[1395, 0, true, 270], [1390, 0, true, 330], [1434, 0, true, 395], [1507, 1, true, 330]],
+  [[1395, 0, true, 270], [1390, 0, true, 330], [1434, 0, true, 395], [1507, 1, true, 330], [1395, 2, true, 360, 25, 4]],
 ];
 const GUILD_REPORTS = NIGHT_PLAN.map((plan, n) => {
   const start = Date.UTC(2026, 8, 3 + Math.floor(n / 2) * 7 + (n % 2) * 2, 9, 30);
   let t = 60_000;
   let id = 1;
   const fights = [];
-  for (const [enc, wipes, kill, killSecs, best] of plan) {
+  for (const [enc, wipes, kill, killSecs, best, diff = 3] of plan) {
     for (let w = 0; w < wipes; w++) {
       const dur = 150_000 + w * 20_000;
-      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: false, bossPercentage: best + (wipes - 1 - w) * 7, startTime: t, endTime: t + dur, difficulty: 3, size: 10 });
+      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: false, bossPercentage: best + (wipes - 1 - w) * 7, startTime: t, endTime: t + dur, difficulty: diff, size: 10 });
       t += dur + 90_000;
     }
     if (kill) {
-      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: true, bossPercentage: 0, startTime: t, endTime: t + killSecs * 1000, difficulty: 3, size: 10 });
+      fights.push({ id: id++, encounterID: enc, name: BOSSES[enc][0], kill: true, bossPercentage: 0, startTime: t, endTime: t + killSecs * 1000, difficulty: diff, size: 10 });
       t += killSecs * 1000 + 90_000;
     }
   }
@@ -175,6 +175,10 @@ function respond(query, variables) {
   const fid = variables.f?.[0] ?? fightsIn(query)?.[0];
   const fight = FIGHTS.find((x) => x.id === fid);
   const wrap = (report) => ({ data: { reportData: { report } } });
+  if (query.includes('worldData')) {
+    const zones = [...query.matchAll(/z(\d+): zone/g)].map((m) => [`z${m[1]}`, { id: Number(m[1]), difficulties: [{ id: 3, name: 'Normal' }, { id: 4, name: 'Heroic' }] }]);
+    return { data: { worldData: Object.fromEntries(zones) } };
+  }
   if (query.includes('attendance(')) return { data: { guildData: { guild: { attendance: { data: ATTENDANCE.slice(0, variables.limit) } } } } };
   if (query.includes('reports(guildID')) return { data: { reportData: { reports: { data: GUILD_REPORTS.slice(0, variables.limit) } } } };
   if (query.includes('guildData')) return { data: { guildData: { guild: GUILD } } };

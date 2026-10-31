@@ -7,8 +7,9 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 /**
  * @param reports  [{ code, title, startTime, endTime, zone: { id, name }, fights: [{ id, encounterID, name, kill,
  *                   bossPercentage, startTime, endTime, difficulty, size }] }] — fight times are relative to the report.
+ * @param opts.difficultyNames  Map "zoneId:difficultyId" → name, from fetchDifficultyNames().
  */
-export function summarizeGuild(reports) {
+export function summarizeGuild(reports, { difficultyNames = new Map() } = {}) {
   const sorted = [...reports].sort((a, b) => a.startTime - b.startTime);
 
   const nights = sorted.map((r) => {
@@ -32,10 +33,12 @@ export function summarizeGuild(reports) {
   sorted.forEach((r, ri) => {
     for (const f of r.fights || []) {
       if (!f.encounterID) continue;
-      const key = `${f.encounterID}:${f.difficulty ?? ''}`;
+      // 10- and 25-player are separate lockouts in MoP, so size is part of what makes a boss row.
+      const key = `${f.encounterID}:${f.difficulty ?? ''}:${f.size ?? ''}`;
       if (!bosses.has(key)) {
         bosses.set(key, {
-          key, encounterID: f.encounterID, name: f.name, difficulty: f.difficulty ?? null, zone: r.zone?.name || 'Other',
+          key, encounterID: f.encounterID, name: f.name, difficulty: f.difficulty ?? null, size: f.size ?? null,
+          zoneId: r.zone?.id ?? null, zone: r.zone?.name || 'Other',
           firstSeen: r.startTime + f.startTime, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(),
         });
       }
@@ -44,7 +47,7 @@ export function summarizeGuild(reports) {
       b.nights.add(r.code);
       const at = r.startTime + f.startTime;
       if (f.kill) {
-        if (!b.kills.length) nights[ri].newKills.push(f.name);
+        if (!b.kills.length) nights[ri].newKills.push(key);
         b.kills.push({ at, duration: f.endTime - f.startTime, code: r.code, fightId: f.id });
       } else {
         b.wipes++;
@@ -58,22 +61,48 @@ export function summarizeGuild(reports) {
     }
   });
 
-  // The same boss on two difficulties gets a label so the rows can be told apart.
-  const byName = new Map();
-  for (const b of bosses.values()) byName.set(b.name, (byName.get(b.name) || 0) + 1);
+  // A boss done on more than one difficulty or size gets a label so the rows can be told apart.
+  const variants = new Map();
+  for (const b of bosses.values()) {
+    if (!variants.has(b.name)) variants.set(b.name, []);
+    variants.get(b.name).push(b);
+  }
 
   const bossList = [...bosses.values()].map((b) => {
     const fastest = b.kills.reduce((best, k) => (!best || k.duration < best.duration ? k : best), null);
+    const siblings = variants.get(b.name);
+    let label = b.name;
+    if (siblings.length > 1) {
+      const parts = [];
+      if (new Set(siblings.map((s) => s.difficulty)).size > 1 && b.difficulty != null) {
+        parts.push(difficultyNames.get(`${b.zoneId}:${b.difficulty}`) || `difficulty ${b.difficulty}`);
+      }
+      // Some sites already name difficulties by size ("25 Player (Heroic)"), so don't repeat it.
+      if (new Set(siblings.map((s) => s.size)).size > 1 && b.size && !parts.some((p) => p.includes(String(b.size)))) {
+        parts.push(`${b.size}-player`);
+      }
+      if (parts.length) label = `${b.name} (${parts.join(', ')})`;
+    }
     return {
       ...b,
       nights: b.nights.size,
-      label: byName.get(b.name) > 1 && b.difficulty != null ? `${b.name} (difficulty ${b.difficulty})` : b.name,
+      label,
       firstKill: b.kills[0] || null,
       lastKill: b.kills[b.kills.length - 1] || null,
       fastest,
     };
   });
 
+  const labelOf = new Map(bossList.map((b) => [b.key, b.label]));
+  for (const n of nights) n.newKills = n.newKills.map((key) => labelOf.get(key));
+
+  // A report has one zone even when the night covered two raids, so a boss goes in the raid where that
+  // encounter was first seen, and later variants (e.g. its heroic) follow it there.
+  const homeZone = new Map();
+  for (const b of [...bossList].sort((a, c) => a.firstSeen - c.firstSeen)) {
+    if (!homeZone.has(b.encounterID)) homeZone.set(b.encounterID, b.zone);
+    b.zone = homeZone.get(b.encounterID);
+  }
   const raidMap = new Map();
   for (const b of [...bossList].sort((a, c) => a.firstSeen - c.firstSeen)) {
     if (!raidMap.has(b.zone)) raidMap.set(b.zone, { name: b.zone, bosses: [] });

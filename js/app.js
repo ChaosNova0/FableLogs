@@ -4,7 +4,7 @@ import { getClientId, setClientId, getToken, login, logout, handleRedirect, redi
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
-  fetchGuild, fetchGuildReports, fetchGuildAttendance, guildCachePrefix,
+  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchDifficultyNames, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
@@ -750,7 +750,8 @@ async function renderGuild(r) {
   ]);
   remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
 
-  const gs = summarizeGuild(reports);
+  const difficultyNames = await fetchDifficultyNames(r.host, reports.map((rep) => rep.zone?.id).filter((id) => id != null));
+  const gs = summarizeGuild(reports, { difficultyNames });
   const att = attendance ? summarizeAttendance(attendance) : null;
 
   view.innerHTML = `

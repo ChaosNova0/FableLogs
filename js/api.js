@@ -191,6 +191,25 @@ export async function fetchGuildReports(host, guildId, limit) {
   return data?.reportData?.reports?.data || [];
 }
 
+// Difficulty names per raid, straight from the site, since the numbers differ between Warcraft Logs sites
+// and the game client. Returns Map "zoneId:difficultyId" → name; empty on failure.
+export async function fetchDifficultyNames(host, zoneIds) {
+  const ids = [...new Set(zoneIds.map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!ids.length) return new Map();
+  try {
+    const fields = ids.map((id) => `z${id}: zone(id: ${id}) { id difficulties { id name } }`).join(' ');
+    const { data } = await gql(host, `{ worldData { ${fields} } }`, {}, { cacheKey: `zones:${host}:${ids.join(',')}` });
+    const names = new Map();
+    for (const zone of Object.values(data?.worldData || {})) {
+      for (const d of zone?.difficulties || []) names.set(`${zone.id}:${d.id}`, d.name);
+    }
+    return names;
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return new Map();
+  }
+}
+
 // Attendance for the guild's recent raids. Returns null rather than failing the page.
 export async function fetchGuildAttendance(host, guildId, limit) {
   try {

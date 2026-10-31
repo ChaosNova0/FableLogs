@@ -275,6 +275,29 @@ check('guild: latest-night first kill takeaway', gsum.takeaways.some((t) => t.st
 check('guild: progression takeaway', gsum.takeaways.some((t) => t.startsWith("Still working on Gara'jal: 1 pull over 1 night")), JSON.stringify(gsum.takeaways));
 check('guild: faster kills takeaway', gsum.takeaways.some((t) => t.includes('Stone Guard 5:30 → 4:10')), JSON.stringify(gsum.takeaways));
 
+// Difficulty and size labels only appear when a boss has more than one variant.
+const vf = (id, diff, size, kill) => ({ ...gf(id, 1, 'Stone Guard', kill, id * 400000, 300), difficulty: diff, size });
+const vreports = [{ code: 'V1', startTime: day, zone: { id: 1008, name: 'MSV' }, fights: [vf(1, 3, 10, true), vf(2, 4, 10, false), vf(3, 3, 25, true), vf(4, 99, 10, true)] }];
+const vnames = new Map([['1008:3', 'Normal'], ['1008:4', 'Heroic']]);
+const vsum = summarizeGuild(vreports, { difficultyNames: vnames });
+const labels = vsum.bosses.map((b) => b.label).sort();
+check('difficulty: named from API', labels.includes('Stone Guard (Heroic, 10-player)'), JSON.stringify(labels));
+check('difficulty: size added when sizes differ', labels.includes('Stone Guard (Normal, 10-player)') && labels.includes('Stone Guard (Normal, 25-player)'), JSON.stringify(labels));
+check('difficulty: unknown id falls back to number', labels.includes('Stone Guard (difficulty 99, 10-player)'), JSON.stringify(labels));
+const heroicOnly = summarizeGuild([{ code: 'H', startTime: day, zone: { id: 1008, name: 'MSV' }, fights: [vf(1, 3, 10, true), vf(2, 4, 10, true)] }], { difficultyNames: vnames });
+check('difficulty: name alone when sizes match', heroicOnly.bosses.map((b) => b.label).sort().join() === 'Stone Guard (Heroic),Stone Guard (Normal)', JSON.stringify(heroicOnly.bosses.map((b) => b.label)));
+check('difficulty: new kills use labels', vsum.nights[0].newKills.includes('Stone Guard (Normal, 25-player)'), JSON.stringify(vsum.nights[0].newKills));
+const sized = summarizeGuild([{ code: 'S', startTime: day, zone: { id: 1, name: 'X' }, fights: [vf(1, 3, 10, true), vf(2, 3, 25, true)] }],
+  { difficultyNames: new Map([['1:3', '25 Player (Heroic)']]) });
+check('difficulty: no size label when difficulty is the same', sized.bosses.map((b) => b.label).sort().join() === 'Stone Guard (10-player),Stone Guard (25-player)', JSON.stringify(sized.bosses.map((b) => b.label)));
+check('difficulty: single variant has no label', gsum.bosses.every((b) => !b.label.includes('(')));
+const moved = summarizeGuild([
+  { code: 'M1', startTime: day, zone: { id: 1008, name: 'MSV' }, fights: [vf(1, 3, 10, true)] },
+  { code: 'M2', startTime: 2 * day, zone: { id: 1009, name: 'HoF' }, fights: [vf(1, 4, 10, true)] },
+], { difficultyNames: vnames });
+check('raid grouping: later variants follow the boss home', moved.raids.length === 1 && moved.raids[0].name === 'MSV' && moved.raids[0].bosses.length === 2,
+  JSON.stringify(moved.raids.map((r) => [r.name, r.bosses.length])));
+
 const att = summarizeAttendance([
   { code: 'a', players: [{ name: 'A', type: 'Mage', presence: 1 }, { name: 'B', type: 'Rogue', presence: 1 }] },
   { code: 'b', players: [{ name: 'A', type: 'Mage', presence: 1 }, { name: 'B', type: 'Rogue', presence: 2 }] },
