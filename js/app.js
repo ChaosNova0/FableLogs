@@ -882,7 +882,10 @@ async function renderPlayer(r) {
   ]);
   const info = specInfo(lk, [detail.damage, detail.healing]);
   // Aura uptimes are only fetched for specs that have checks written.
-  const auras = SPEC_MODULES[info(r.player).classSpec] ? await fetchPlayerAuras(r.host, r.code, fight, r.player) : null;
+  const checks = SPEC_MODULES[info(r.player).classSpec];
+  const auras = checks
+    ? await fetchPlayerAuras(r.host, r.code, fight, r.player, checks.filter((c) => c.kind === 'debuff').flatMap((c) => c.names))
+    : null;
   const prep = consumables(fight, detail.combatants, detail.potions, lk).rows.find((x) => x.pid === r.player) || null;
   const pa = analyzePlayer({
     fight, pid: r.player, lk, damage: detail.damage, healing: detail.healing,

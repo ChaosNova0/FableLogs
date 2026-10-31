@@ -488,20 +488,23 @@ export async function fetchEnemyDebuffs(host, code, fight) {
 }
 
 // One player's buffs (the Buffs table: auras on them, with uptimes) and the debuff events they caused on enemies,
-// for the spec checks. The Debuffs table filtered by sourceID lists debuffs on that actor rather than ones they
-// applied, so their DoTs come from events instead. Returns { buffs, debuffEvents }; null on failure.
-export async function fetchPlayerAuras(host, code, fight, pid) {
+// for the spec checks. Neither the Debuffs table nor events filtered by sourceID gave a player's own DoTs on a real
+// log, so the debuffs are fetched by name for everyone (a small set) and kept where this player is the source.
+// debuffNames: the spec's debuffs to check. Returns { buffs, debuffEvents }; null on failure.
+export async function fetchPlayerAuras(host, code, fight, pid, debuffNames = []) {
   try {
     const [{ data }, debuffEvents] = await Promise.all([
       gql(host, `query ($code: String!, $f: [Int]!, $p: Int!) { reportData { report(code: $code) {
         buffs: table(dataType: Buffs, fightIDs: $f, sourceID: $p)
       } } }`, { code, f: [fight.id], p: pid }, { cacheKey: `${code}:buffs:${fight.id}:${pid}` }),
-      fetchAllEvents(host, code, { dataType: 'Debuffs', hostilityType: 'Enemies', fightIDs: [fight.id], sourceID: pid },
-        `${code}:debuffevents:${fight.id}:${pid}`),
+      debuffNames.length
+        ? fetchAllEvents(host, code, { dataType: 'Debuffs', hostilityType: 'Enemies', fightIDs: [fight.id], filterExpression: nameFilter(debuffNames) },
+          `${code}:dots:${fight.id}:${[...debuffNames].sort().join('|')}`)
+        : [],
     ]);
     const r = data?.reportData?.report;
     if (!r) return null;
-    return { buffs: r.buffs?.data ?? r.buffs ?? null, debuffEvents };
+    return { buffs: r.buffs?.data ?? r.buffs ?? null, debuffEvents: debuffEvents.filter((e) => e.sourceID === pid) };
   } catch (err) {
     if (err instanceof AuthError || err instanceof RateLimitError) throw err;
     return null;

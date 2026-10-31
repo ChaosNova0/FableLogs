@@ -487,6 +487,11 @@ check('buffs: no combatant info', buffCoverage([1], [], blk, []) === null);
 const dc = debuffCoverage({ auras: [{ name: 'Weakened Armor', totalUptime: 50000 }, { name: 'Weakened Armor', totalUptime: 90000 }, { name: 'Curse of the Elements', totalUptime: 300000 }] }, { startTime: 0, endTime: 100000 }, blk, ['Warrior-Arms']);
 check('debuffs: best uptime, capped', dc.find((d) => d.key === 'armor').uptime === 0.9 && dc.find((d) => d.key === 'magic').uptime === 1 && dc.find((d) => d.key === 'blows').uptime === 0);
 check('debuffs: no table', debuffCoverage(null, { startTime: 0, endTime: 1 }, blk, []) === null);
+// As a real MoP Classic log names them: Weakened Armor shows as "Mystic Touch", Curse of the Elements as "Chaos Brand".
+const renamed = debuffCoverage({ auras: [{ name: 'Mystic Touch', guid: 113746, totalUptime: 74000 }, { name: 'Chaos Brand', guid: 1490, totalUptime: 67000 }] }, { startTime: 0, endTime: 100000 }, blk, []);
+check('debuffs: matched by spell id', renamed.find((d) => d.key === 'armor').uptime === 0.74 && renamed.find((d) => d.key === 'magic').uptime === 0.67, JSON.stringify(renamed));
+check('buffs: matched by spell id', buffCoverage([1], [{ sourceID: 1, auras: [{ ability: 1459, name: 'Something Else' }] }], blk, [])
+  .filter((c) => c.have).map((c) => c.key).join() === 'sp,crit');
 const nbc = nightBuffCoverage([{ fight: { id: 1 }, coverage: cov }, { fight: { id: 2 }, coverage: null }, { fight: { id: 3 }, coverage: cov.map((c) => (c.key === 'stats' ? { ...c, have: 0, pct: 0 } : c)) }]);
 const nbStats = nbc.find((b) => b.key === 'stats');
 check('buffs: night coverage', nbc[0].pulls === 2 && nbStats.full === 0 && nbStats.missing.map((f) => f.id).join() === '3' && nbc.find((b) => b.key === 'ap').full === 2, JSON.stringify(nbStats));

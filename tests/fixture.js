@@ -264,17 +264,17 @@ function respond(query, variables) {
     const buffs = { 6: [up('Invocation', 0.78)], 7: [up('Slice and Dice', 0.97)] }[variables.p] || [];
     return wrap({ buffs: { data: { auras: buffs } } });
   }
-  if (query.includes('dataType: Debuffs') && query.includes('sourceID:')) {
-    // The player's debuffs on the boss, as apply/remove events: Nether Tempest with one gap, Revealing Strike patchy.
+  if (query.includes('dataType: Debuffs') && query.includes('filterExpression')) {
+    // Debuffs on the boss by name, from everyone (the app keeps the player's own): Frostbyte's Nether Tempest with one
+    // gap, Shank's Revealing Strike patchy, and a second rogue's Revealing Strike that must not count for Shank.
     const f = FIGHTS.find((x) => x.id === fightsIn(query)[0]);
-    const pid = Number(query.match(/sourceID: (\d+)/)[1]);
     const span = f.endTime - f.startTime;
-    const plan = { 6: [114239, [[0.01, 0.5], [0.57, 1]]], 7: [84617, [[0.05, 0.3], [0.4, 0.6], [0.75, 0.95]]] }[pid];
-    const events = plan ? plan[1].flatMap(([a, b]) => [
-      { timestamp: f.startTime + Math.round(span * a), type: 'applydebuff', sourceID: pid, targetID: boss(f), abilityGameID: plan[0], fight: f.id },
-      ...(b < 1 ? [{ timestamp: f.startTime + Math.round(span * b), type: 'removedebuff', sourceID: pid, targetID: boss(f), abilityGameID: plan[0], fight: f.id }] : []),
-    ]) : [];
-    return wrap({ events: { data: events, nextPageTimestamp: null } });
+    const plans = [[6, 114239, [[0.01, 0.5], [0.57, 1]]], [7, 84617, [[0.05, 0.3], [0.4, 0.6], [0.75, 0.95]]], [99, 84617, [[0, 1]]]];
+    const events = plans.flatMap(([pid, ab, spans]) => spans.flatMap(([a, b]) => [
+      { timestamp: f.startTime + Math.round(span * a), type: 'applydebuff', sourceID: pid, targetID: boss(f), abilityGameID: ab, fight: f.id },
+      ...(b < 1 ? [{ timestamp: f.startTime + Math.round(span * b), type: 'removedebuff', sourceID: pid, targetID: boss(f), abilityGameID: ab, fight: f.id }] : []),
+    ]));
+    return wrap({ events: { data: events.sort((x, y) => x.timestamp - y.timestamp), nextPageTimestamp: null } });
   }
   if (query.includes('debuffs: table(dataType: Debuffs')) {
     // Raid debuffs on the boss: armor and Weakened Blows kept up, Physical Vulnerability patchy, no spell debuff.
