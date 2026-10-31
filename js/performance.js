@@ -65,6 +65,95 @@ function castBreakdown(casts, alive, lk) {
 }
 
 /**
+ * One player across every boss pull in a report: a row per pull plus night-wide totals and highlights.
+ * @param ctx.report        report (fights, masterData)
+ * @param ctx.lk            lookups
+ * @param ctx.pid           player actor id
+ * @param ctx.deaths        player death events for the whole report
+ * @param ctx.firstDeaths   how many wipes this player died first on (from summarizeReport)
+ * @param ctx.fightTables   Map fightId → { damage, healing } (fetchFightTables)
+ * @param ctx.rankings      Map fightId → rankings JSON (kills only)
+ * @param ctx.prep          this player's prepOverview() row, or null
+ */
+export function analyzeNightPlayer(ctx) {
+  const { report, lk, pid } = ctx;
+  const actor = lk.actor(pid);
+  const fights = (report.fights || []).filter((f) => (f.friendlyPlayers || []).includes(pid));
+  const pullNo = new Map();
+  const seenPerBoss = new Map();
+  for (const f of report.fights || []) {
+    const n = (seenPerBoss.get(f.encounterID) || 0) + 1;
+    seenPerBoss.set(f.encounterID, n);
+    pullNo.set(f.id, n);
+  }
+
+  const specCount = new Map();
+  const rows = fights.map((f) => {
+    const tables = ctx.fightTables.get(f.id) || {};
+    const d = findEntry(tables.damage, pid);
+    const h = findEntry(tables.healing, pid);
+    const spec = specOf(d) || specOf(h);
+    if (spec) specCount.set(spec, (specCount.get(spec) || 0) + 1);
+    const duration = f.endTime - f.startTime;
+    const death = (ctx.deaths || []).filter((x) => x.fight === f.id && x.targetID === pid).sort((a, b) => a.timestamp - b.timestamp)[0];
+    const alive = death ? Math.max(0, death.timestamp - f.startTime) : duration;
+    const activeMs = Math.max(d?.activeTime || 0, h?.activeTime || 0);
+    return {
+      fight: f, pullNo: pullNo.get(f.id), duration, alive, spec,
+      damage: d?.total || 0, healing: h?.total || 0,
+      dps: (d?.total || 0) / Math.max(1, duration / 1000), hps: (h?.total || 0) / Math.max(1, duration / 1000),
+      activePct: activeMs && alive ? Math.min(1, activeMs / alive) : null,
+      parse: f.kill ? findRanking(ctx.rankings?.get(f.id), f.id, actor?.name)?.rankPercent ?? null : null,
+      diedAt: death ? death.timestamp - f.startTime : null,
+    };
+  });
+
+  const spec = [...specCount.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] || null;
+  const role = roleOf(actor?.subType, spec);
+  const healer = role === 'healer';
+  const time = rows.reduce((t, r) => t + r.duration, 0);
+  const output = rows.reduce((t, r) => t + (healer ? r.healing : r.damage), 0) / Math.max(1, time / 1000);
+  const activeRows = rows.filter((r) => r.activePct != null);
+  const aliveTime = activeRows.reduce((t, r) => t + r.alive, 0);
+  const activePct = aliveTime ? activeRows.reduce((t, r) => t + r.activePct * r.alive, 0) / aliveTime : null;
+  const parses = rows.filter((r) => r.parse != null);
+  const avgParse = parses.length ? parses.reduce((t, r) => t + r.parse, 0) / parses.length : null;
+  const best = parses.reduce((b, r) => (!b || r.parse > b.parse ? r : b), null);
+  const died = rows.filter((r) => r.diedAt != null);
+
+  const highlights = [];
+  const add = (level, text) => highlights.push({ level, text });
+  if (rows.length) {
+    const share = died.length / rows.length;
+    if (died.length) {
+      add(share >= 0.4 ? 'major' : 'minor', `Died on ${died.length} of ${rows.length} pulls${ctx.firstDeaths ? `, and was the first to die on ${ctx.firstDeaths} wipe${ctx.firstDeaths === 1 ? '' : 's'}` : ''}. Their pull pages show what killed them.`);
+    } else {
+      add('good', `Survived all ${rows.length} pulls.`);
+    }
+  }
+  if (activePct != null && !healer) {
+    const p = Math.round(activePct * 100);
+    if (activePct >= 0.9) add('good', `Active ${p}% of the time alive across the night.`);
+    else add(activePct < 0.8 ? 'major' : 'minor', `Active ${p}% of the time alive across the night. Aim for 90% or more.`);
+  }
+  if (best) add(best.parse >= 75 ? 'good' : 'info', `Best parse: ${Math.round(best.parse)} on ${best.fight.name}${parses.length > 1 ? `; ${Math.round(avgParse)} on average across ${parses.length} kills` : ''}.`);
+  if (ctx.prep?.info) {
+    const misses = [
+      ctx.prep.flaskMissed && `no flask on ${ctx.prep.flaskMissed} of ${ctx.prep.info} pulls`,
+      ctx.prep.foodMissed && `no food on ${ctx.prep.foodMissed} of ${ctx.prep.info} pulls`,
+    ].filter(Boolean);
+    if (misses.length) add('minor', `Prep: ${misses.join(', ')}.`);
+    else add('good', 'Flasked and fed on every pull.');
+  }
+  highlights.sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]);
+
+  return {
+    pid, actor, className: actor?.subType, spec, role, rows, time, output, outputLabel: healer ? 'HPS' : 'DPS',
+    activePct, avgParse, bestParse: best?.parse ?? null, deaths: died.length, highlights,
+  };
+}
+
+/**
  * @param ctx.fight      fight object
  * @param ctx.pid        player actor id
  * @param ctx.lk         lookups from buildLookups

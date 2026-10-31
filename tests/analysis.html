@@ -251,6 +251,25 @@ check('raids: kill count', grouped[1].killed === 1 && grouped[1].pulls === 2);
 const single = groupByRaid([enc(1, 0, true), enc(2, 10, false)], () => null, "Mogu'shan Vaults");
 check('raids: no zone data falls back to report zone', single.length === 1 && single[0].name === "Mogu'shan Vaults", JSON.stringify(single));
 
+// ---------- Player across the night ----------
+const { analyzeNightPlayer } = await import('../js/performance.js');
+const nightTables = new Map(report.fights.map((f) => [f.id, {
+  damage: { entries: [{ id: 3, name: 'Pewpew', type: 'Mage', icon: 'Mage-Frost', total: (f.endTime - f.startTime) * 100, activeTime: (f.endTime - f.startTime) * 0.95 }] },
+  healing: { entries: [] },
+}]));
+const nightRanks = new Map([[2, { data: [{ fightID: 2, roles: { dps: { characters: [{ name: 'Pewpew', rankPercent: 88 }] } } }] }]]);
+const np = analyzeNightPlayer({
+  report, lk, pid: 3, deaths, firstDeaths: 1, fightTables: nightTables, rankings: nightRanks,
+  prep: { info: 2, flaskMissed: 1, foodMissed: 0 },
+});
+check('night: one row per pull', np.rows.length === 2 && np.rows[0].pullNo === 1 && np.rows[1].pullNo === 2);
+check('night: spec and role', np.spec === 'Frost' && np.role === 'dps' && np.outputLabel === 'DPS');
+check('night: output across boss time', Math.round(np.output) === 100000, String(np.output));
+check('night: death and parse', np.deaths === 1 && np.rows[0].diedAt === 60000 && np.rows[1].parse === 88 && np.rows[0].parse === null);
+check('night: highlights', np.highlights.some((h) => h.text.startsWith('Died on 1 of 2 pulls, and was the first to die on 1 wipe'))
+  && np.highlights.some((h) => h.text.startsWith('Best parse: 88 on Stone Guard')) && np.highlights.some((h) => h.text.startsWith('Prep: no flask on 1 of 2')),
+JSON.stringify(np.highlights));
+
 // ---------- Guild ----------
 const { summarizeGuild, summarizeAttendance } = await import('../js/guild.js');
 const { parseGuildLink, parseLink } = await import('../js/api.js');

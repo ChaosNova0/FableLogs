@@ -403,6 +403,19 @@ select {
 .role-dps .team-list, .role-unknown .team-list { grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); }
 @media (max-width: 760px) { .team-roles { grid-template-columns: minmax(0, 1fr); } }
 
+/* Report overview: main content with the raid roster in a column on the right. */
+.report-overview { display: grid; grid-template-columns: minmax(0, 1fr) 270px; gap: 1rem; align-items: start; }
+.report-main { min-width: 0; }
+.report-roster { position: sticky; top: 1rem; }
+.report-roster .team-role + .team-role { margin-top: .9rem; }
+a.team-member { color: var(--text); text-decoration: none; }
+a.team-member:hover { background: color-mix(in srgb, var(--cls) 14%, var(--surface-2)); }
+a.team-member:hover .player { text-decoration: underline; }
+@media (max-width: 1000px) {
+  .report-overview { grid-template-columns: minmax(0, 1fr); }
+  .report-roster { position: static; }
+}
+
 .team-role h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 .4rem; }
 .team-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
 .team-member {

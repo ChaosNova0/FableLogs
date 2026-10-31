@@ -356,6 +356,26 @@ export async function fetchReportPrep(host, code, fightIDs) {
   }
 }
 
+// Damage and healing tables for every boss pull in one request (aliased per fight), for the player-across-the-
+// night page. Returns Map fightId → { damage, healing }; empty on failure.
+export async function fetchFightTables(host, code, fightIDs) {
+  const ids = fightIDs.map(Number).filter(Number.isFinite);
+  const out = new Map();
+  if (!ids.length) return out;
+  try {
+    const fields = ids.map((id) => `d${id}: table(dataType: DamageDone, fightIDs: [${id}]) h${id}: table(dataType: Healing, fightIDs: [${id}])`).join(' ');
+    const { data } = await gql(host, `query ($code: String!) { reportData { report(code: $code) { ${fields} } } }`, { code },
+      { cacheKey: `${code}:fighttables:${ids.join(',')}` });
+    const r = data?.reportData?.report || {};
+    for (const id of ids) {
+      out.set(id, { damage: r[`d${id}`]?.data ?? r[`d${id}`] ?? null, healing: r[`h${id}`]?.data ?? r[`h${id}`] ?? null });
+    }
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+  }
+  return out;
+}
+
 export function fetchPlayerCasts(host, code, fight, pid) {
   return fetchAllEvents(host, code, { dataType: 'Casts', fightIDs: [fight.id], sourceID: pid },
     `${code}:casts:${fight.id}:${pid}`);

@@ -3,14 +3,14 @@ import { store } from './store.js';
 import { getClientId, setClientId, getToken, login, logout, handleRedirect, redirectUri } from './auth.js';
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
-  fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
+  fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
 import { summarizeGuild, buildRoster, buildRaidTeam, layoutTimeline } from './guild.js';
-import { analyzePlayer, findEntry, findRanking, specOf } from './performance.js';
+import { analyzePlayer, analyzeNightPlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
   fmtTime, fmtDuration, fmtNum, fmtPct,
@@ -38,7 +38,7 @@ function route() {
 function href({ code, host, fight, player }) {
   const p = new URLSearchParams({ r: code, h: host });
   if (fight != null) p.set('f', fight);
-  if (fight != null && player != null) p.set('p', player);
+  if (player != null) p.set('p', player);
   return `#${p}`;
 }
 
@@ -263,7 +263,7 @@ async function loadReport(r) {
 function reportHeader(r, report, crumbs = []) {
   const date = new Date(report.startTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const guild = report.guild ? `${esc(report.guild.name)}${report.guild.server ? ` · ${esc(report.guild.server.name)}` : ''}` : esc(report.owner?.name || '');
-  const trail = [{ label: esc(report.title), href: crumbs.length ? href({ ...r, fight: null }) : null }, ...crumbs];
+  const trail = [{ label: esc(report.title), href: crumbs.length ? href({ ...r, fight: null, player: null }) : null }, ...crumbs];
   return `<section class="report-head">
     <div class="report-title">
       <nav class="crumbs" aria-label="Breadcrumb">${trail.map((c, i) => (c.href && i < trail.length - 1
@@ -346,7 +346,7 @@ async function renderReport(r) {
   view.innerHTML = `
     ${reportHeader(r, report)}
     ${tabbed('fl.tab.report', [
-    { id: 'overview', label: 'Overview', html: overview },
+    { id: 'overview', label: 'Overview', html: `<div class="report-overview"><div class="report-main">${overview}</div>${reportRosterHtml(report, lk, totals, s, r)}</div>` },
     { id: 'deaths', label: 'Deaths', count: deaths.length, html: deathsTab },
     { id: 'prep', label: 'Prep & gear', html: prepCard(prep, lk) },
   ])}
@@ -577,6 +577,100 @@ function playersCard(fight, detail, fightDeaths, rankings, lk, r) {
 
 const TIP_ICONS = { major: '!', minor: '•', info: 'i', good: '✓' };
 
+// Everyone in the log, by role, beside the report overview. Each name opens their whole-night page.
+function reportRosterHtml(report, lk, totals, s, r) {
+  const ids = [...new Set((report.fights || []).flatMap((f) => raidPlayers(f, lk)))];
+  if (!ids.length) return '';
+  const deathsOf = new Map(s.deathCounts);
+  const groups = { tank: [], healer: [], dps: [], unknown: [] };
+  for (const pid of ids) {
+    const spec = specOf(findEntry(totals?.damage, pid)) || specOf(findEntry(totals?.healing, pid));
+    const className = lk.actor(pid)?.subType;
+    groups[spec ? roleOf(className, spec) : 'unknown'].push({ pid, spec, className, name: lk.actor(pid)?.name || '' });
+  }
+  const item = (p) => `<li><a class="team-member" style="--cls:${classColor(p.className)}" href="${href({ ...r, fight: null, player: p.pid })}"
+      title="${esc([p.spec, p.className].filter(Boolean).join(' '))}">
+    <img class="spec-icon" src="${specIcon(p.className, p.spec)}" alt="" loading="lazy" data-optional>
+    <span class="player">${esc(p.name)}</span>
+    ${deathsOf.get(p.pid) ? `<span class="team-att" title="Deaths">☠${deathsOf.get(p.pid)}</span>` : ''}
+  </a></li>`;
+  return `<aside class="card raid-team report-roster"><h2>Raid roster <span class="muted">${ids.length}</span></h2>
+    <p class="hint">Pick a player for their whole night, then drill into any boss.</p>
+    ${TEAM_ROLES.filter(([role]) => groups[role].length).map(([role, label]) => `<div class="team-role">
+      <h3>${label} <span class="muted">${groups[role].length}</span></h3>
+      <ul class="team-list">${groups[role].sort((a, b) => (a.className || '').localeCompare(b.className || '') || a.name.localeCompare(b.name)).map(item).join('')}</ul>
+    </div>`).join('')}
+  </aside>`;
+}
+
+async function renderNightPlayer(r) {
+  setLoading('Loading report…');
+  const { report, lk, deaths } = await loadReport(r);
+  remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
+  const actor = lk.actor(r.player);
+  if (!actor || actor.type !== 'Player') throw new Error('That player isn\'t in this report.');
+
+  setLoading(`Analysing ${actor.name}'s night…`);
+  const fightIDs = (report.fights || []).map((f) => f.id);
+  const kills = (report.fights || []).filter((f) => f.kill && (f.friendlyPlayers || []).includes(r.player));
+  const [tables, prepData, rankingList] = await Promise.all([
+    fetchFightTables(r.host, r.code, fightIDs),
+    fetchReportPrep(r.host, r.code, fightIDs),
+    Promise.all(kills.map((f) => fetchRankings(r.host, r.code, f))),
+  ]);
+  const s = summarizeReport(report, deaths, lk);
+  const prepRow = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions).players.find((p) => p.pid === r.player) : null;
+  const np = analyzeNightPlayer({
+    report, lk, pid: r.player, deaths,
+    firstDeaths: (s.firstDeathCounts.find(([id]) => id === r.player) || [0, 0])[1],
+    fightTables: tables,
+    rankings: new Map(kills.map((f, i) => [f.id, rankingList[i]])),
+    prep: prepRow,
+  });
+
+  const stat = (label, value, cls = '') => `<div class="stat ${cls}"><span class="stat-val">${value}</span><span class="stat-label">${esc(label)}</span></div>`;
+  const stats = [
+    stat(`${np.outputLabel} (boss fights)`, fmtNum(np.output)),
+    np.activePct != null ? stat('Active time', `${Math.round(np.activePct * 100)}%`) : '',
+    np.avgParse != null ? stat('Average parse', `${Math.round(np.avgParse)}`, `parse-${parseTier(np.avgParse)}`) : '',
+    np.bestParse != null ? stat('Best parse', `${Math.round(np.bestParse)}`, `parse-${parseTier(np.bestParse)}`) : '',
+    stat('Deaths', `${np.deaths} / ${np.rows.length}`),
+    stat('Time in boss fights', fmtDuration(np.time)),
+  ].join('');
+
+  view.innerHTML = `
+    ${reportHeader(r, report, [{ label: esc(actor.name) }])}
+    <section class="card fight-head">
+      <div>
+        <h2>${playerTag(lk, r.player)} <span class="muted">${esc(np.spec || '')} ${esc(actor.subType || '')}</span></h2>
+        <p class="fight-meta"><span class="muted">${esc(ROLE_LABEL[np.role])} · ${np.rows.length} boss pull${np.rows.length === 1 ? '' : 's'}</span></p>
+      </div>
+    </section>
+    <section class="stats">${stats}</section>
+    <section class="card"><h2>Night summary</h2>
+      ${np.highlights.length ? `<ul class="tips">${np.highlights.map((t) => `<li class="tip ${t.level}"><span class="tip-icon">${TIP_ICONS[t.level]}</span><span>${esc(t.text)}</span></li>`).join('')}</ul>`
+        : '<p class="muted">Nothing to flag.</p>'}
+    </section>
+    <section class="card"><h2>Boss by boss</h2>
+      <p class="hint">Open a pull for that boss's cooldown usage, casts, tips and death recap.</p>
+      <table class="table night-pulls"><thead><tr>
+        <th>Boss</th><th>Result</th><th class="num">${np.outputLabel}</th><th class="num">Active</th><th class="num">Parse</th><th>Died</th><th></th>
+      </tr></thead><tbody>
+      ${np.rows.map((row) => `<tr>
+        <td>${esc(row.fight.name)} <span class="muted">#${row.pullNo}</span></td>
+        <td><span class="badge ${row.fight.kill ? 'kill' : 'wipe'}">${row.fight.kill ? `Kill · ${fmtTime(row.duration)}` : `Wipe · ${fmtPct(row.fight.bossPercentage)}`}</span></td>
+        <td class="num">${fmtNum(np.role === 'healer' ? row.hps : row.dps)}</td>
+        <td class="num">${row.activePct == null ? '' : `${Math.round(row.activePct * 100)}%`}</td>
+        <td class="num">${row.fight.kill ? parseBadge(row.parse) : ''}</td>
+        <td class="${row.diedAt != null ? 'no' : 'muted'}">${row.diedAt != null ? fmtTime(row.diedAt) : ''}</td>
+        <td><a href="${href({ ...r, fight: row.fight.id, player: r.player })}">Details →</a></td>
+      </tr>`).join('')}
+      </tbody></table>
+    </section>
+    ${rawBlock('night rows', np.rows.map((x) => ({ ...x, fight: x.fight.id })))}`;
+  bindRefresh(r);
+}
+
 async function renderPlayer(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
@@ -604,6 +698,7 @@ async function renderPlayer(r) {
   const nav = `<nav class="pull-nav">
     ${idx > 0 ? `<a class="button secondary" href="${href({ ...r, fight: pulls[idx - 1].id })}">← Previous pull</a>` : ''}
     ${idx >= 0 && idx < pulls.length - 1 ? `<a class="button secondary" href="${href({ ...r, fight: pulls[idx + 1].id })}">Next pull →</a>` : ''}
+    <a class="button secondary" href="${href({ ...r, fight: null })}">Whole night</a>
   </nav>`;
   const pullNo = pullNumber(report, fight);
 
@@ -923,6 +1018,7 @@ async function render() {
     if (!getToken()) throw new AuthError('Connect your Warcraft Logs account to load reports.');
     if (r.guild) await renderGuild(r);
     else if (r.fight != null && r.player != null) await renderPlayer(r);
+    else if (r.player != null) await renderNightPlayer(r);
     else if (r.fight != null) await renderFight(r);
     else await renderReport(r);
     if (seq === renderSeq) window.scrollTo(0, 0);

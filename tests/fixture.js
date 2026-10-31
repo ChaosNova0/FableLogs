@@ -243,6 +243,15 @@ function respond(query, variables) {
       damage: { data: table(fight, 'dmg') }, healing: { data: table(fight, 'heal') },
     });
   }
+  if (/\bd\d+: table\(/.test(query)) {
+    // Per-fight tables, aliased d<fightId> / h<fightId>.
+    const r = {};
+    for (const m of query.matchAll(/\b([dh])(\d+): table\(/g)) {
+      const f = FIGHTS.find((x) => x.id === Number(m[2]));
+      r[`${m[1]}${m[2]}`] = { data: f ? table(f, m[1] === 'd' ? 'dmg' : 'heal') : null };
+    }
+    return wrap(r);
+  }
   if (query.includes('damage: table')) return wrap({ damage: { data: table(null, 'dmg') }, healing: { data: table(null, 'heal') }, interrupts: { data: interrupts }, dispels: { data: dispels } });
   if (query.includes('dataType: CombatantInfo')) return wrap({ events: { data: combatants, nextPageTimestamp: null } });
   if (query.includes('dataType: Casts') && query.includes('filterExpression')) return wrap({ events: { data: potions, nextPageTimestamp: null } });
