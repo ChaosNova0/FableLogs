@@ -814,7 +814,7 @@ async function renderCompare(r) {
     <td class="num">${p.a?.avoid ?? '–'} → ${p.b?.avoid ?? '–'}</td>
   </tr>`).join('');
   const playersHtml = `<section class="card"><h2>Players</h2>
-    <p class="hint">DPS (HPS for healers) in each pull, biggest drop first. "out" means they weren't in that pull.</p>
+    <p class="hint">DPS (HPS for healers) per second alive in each pull, so an early death doesn't read as low output; the Died columns show the deaths. Biggest drop first. "out" means they weren't in that pull.</p>
     <table class="table compare players"><thead><tr><th>Player</th><th class="num">${A}</th><th class="num">${B}</th><th class="num">Change</th>
       <th class="num">Active</th><th class="num">Died (A)</th><th class="num">Died (B)</th><th class="num">Avoidable hits</th></tr></thead>
     <tbody>${playerRows}</tbody></table></section>`;

@@ -598,7 +598,12 @@ const cdCasts = [
 const sA = summarizePull({ fight: fA, deaths: [{ targetID: 2, timestamp: 30000, fight: 10 }, { targetID: 1, timestamp: 40000, fight: 10 }], detail: cDetail([[1, 100e6], [2, 100e6], [3, 50e6]]), cdCasts }, clk, cInfo);
 const sB = summarizePull({ fight: fB, deaths: [{ targetID: 2, timestamp: 290000, fight: 11 }], detail: cDetail([[1, 120e6], [2, 50e6], [4, 80e6]]), cdCasts }, clk, cInfo);
 const cmpRes = comparePulls(sA, sB);
-check('compare: biggest drop first', cmpRes.players[0].pid === 2 && Math.abs(cmpRes.players[0].change + 0.5) < 1e-9 && cmpRes.players[1].pid === 1, JSON.stringify(cmpRes.players.map((p) => [p.pid, p.change])));
+// Output is per second alive: P2 did 100M in 30s alive (A), then 50M in 90s alive (B).
+check('compare: biggest drop first, per second alive', cmpRes.players[0].pid === 2 && Math.abs(cmpRes.players[0].change - ((50e6 / 90) / (100e6 / 30) - 1)) < 1e-9
+  && cmpRes.players[1].pid === 1 && Math.abs(sA.players.get(3).dps - 500000) < 1e-6, JSON.stringify(cmpRes.players.map((p) => [p.pid, p.change])));
+// Battle-ressed and killed again: measured over the whole pull.
+const sRez = summarizePull({ fight: fA, deaths: [{ targetID: 1, timestamp: 20000, fight: 10 }, { targetID: 1, timestamp: 60000, fight: 10 }], detail: cDetail([[1, 100e6]]), cdCasts: [] }, clk, cInfo);
+check('compare: died twice is measured over the whole pull', Math.abs(sRez.players.get(1).dps - 1e6) < 1e-6);
 check('compare: swaps', cmpRes.swappedIn.join() === '4' && cmpRes.swappedOut.join() === '3');
 check('compare: died in both', cmpRes.diedBoth.join() === '2');
 check('compare: lust effects merged, per pull', cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').a.length === 1 && cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').b.length === 1

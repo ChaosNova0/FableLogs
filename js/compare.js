@@ -43,12 +43,16 @@ export function summarizePull(side, lk, info) {
   const players = new Map(pids.map((pid) => {
     const d = findEntry(side.detail.damage, pid);
     const h = findEntry(side.detail.healing, pid);
-    const death = deaths.find((x) => x.targetID === pid);
+    const mine = deaths.filter((x) => x.targetID === pid);
+    const death = mine[0];
     const alive = death ? Math.max(1, death.timestamp - fight.startTime) : fight.endTime - fight.startTime;
     const activeMs = Math.max(d?.activeTime || 0, h?.activeTime || 0);
+    // Output per second alive, so an early death doesn't read as low output (the Died columns show the deaths).
+    // Someone battle-ressed and killed again is measured over the whole pull, since the time they lay dead isn't known.
+    const outSecs = mine.length > 1 ? secs : alive / 1000;
     return [pid, {
       pid, spec: info(pid).spec, role: role(pid),
-      dps: (d?.total || 0) / secs, hps: (h?.total || 0) / secs,
+      dps: (d?.total || 0) / outSecs, hps: (h?.total || 0) / outSecs,
       active: activeMs ? Math.min(1, activeMs / alive) : null,
       diedAt: death ? rel(death.timestamp) : null,
       avoid: mech?.players.find((p) => p.pid === pid)?.hits || 0,
