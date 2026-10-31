@@ -351,6 +351,20 @@ const listed = summarizeGuild([{ ...greports[0], zone: { id: 9, name: 'MSV' } }]
 check('progress: uses the site boss list in order', listed.bosses.map((b) => b.name).join() === 'Stone Guard,Feng,Elegon' && listed.total === 3, JSON.stringify(listed.bosses.map((b) => b.name)));
 check('progress: unpulled boss not killed, raid not cleared', !listed.bosses[2].killed && listed.bosses[2].pulls === 0 && listed.killed === 2 && !listed.cleared);
 
+// Timeline: first kills placed along the raid's date range; close ones drop to another lane.
+const { layoutTimeline } = await import('../js/guild.js');
+const tlRaid = { start: 0, end: 100, bosses: [
+  { name: 'A', killed: true, firstKill: { at: 0 } }, { name: 'B', killed: true, firstKill: { at: 5 } },
+  { name: 'C', killed: true, firstKill: { at: 50 } }, { name: 'D', killed: false }, { name: 'E', killed: true, firstKill: { at: 100 } },
+] };
+const tl = layoutTimeline(tlRaid);
+check('timeline: only kills, in date order', tl.map((k) => k.boss.name).join() === 'A,B,C,E');
+check('timeline: ends clamped so markers stay inside', tl[0].pct === 6 && tl[3].pct === 94, JSON.stringify(tl.map((k) => k.pct)));
+check('timeline: crowded kills drop a lane', tl[0].lane === 0 && tl[1].lane === 1 && tl[2].lane === 0, JSON.stringify(tl.map((k) => k.lane)));
+check('timeline: same-day span puts kill mid-line', layoutTimeline({ start: 5, end: 5, bosses: [{ killed: true, firstKill: { at: 5 } }] })[0].pct === 50);
+const gp = summarizeGuild(greports).progress[0];
+check('progress: timeline range and nights', gp.start === day && gp.end === 3 * day && gp.nights.length === 3, JSON.stringify([gp.start, gp.end, gp.nights]));
+
 const g1 = parseGuildLink('https://classic.warcraftlogs.com/guild/id/123456');
 check('guild link: by id', g1?.host === 'classic.warcraftlogs.com' && g1.guild.id === 123456, JSON.stringify(g1));
 const g2 = parseGuildLink('https://classic.warcraftlogs.com/guild/us/mirage-raceway/Fable%20Hub');
