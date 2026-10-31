@@ -5,11 +5,12 @@ import {
   AuthError, isAllowedHost, parseLink, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
-  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, fetchNamedCasts, clearReportCache,
+  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, fetchNamedCasts, fetchFightGraphs, clearReportCache,
 } from './api.js';
 import { mechanicsFor, trackedNames, analyzeMechanics, nightMechanics } from './mechanics.js';
 import { buffCoverage, debuffCoverage, nightBuffCoverage } from './buffs.js';
-import { progressChart } from './charts.js';
+import { progressChart, lineChart } from './charts.js';
+import { raidDps, bossHealth } from './timeline.js';
 import { RAID_COOLDOWNS, summarizePull, comparePulls, defaultComparison } from './compare.js';
 import { SPEC_MODULES } from './specs/index.js';
 import { prepOverview, SLOT_NAMES, ENCHANT_SLOTS } from './prep.js';
@@ -754,6 +755,25 @@ function changeCell(change) {
   return `<td class="num ${p <= -10 ? 'no' : p >= 10 ? 'yes' : 'muted'}">${signed(p)}%</td>`;
 }
 
+// Boss health and raid DPS over time for both pulls, on a shared time axis: where the later pull pulled ahead or
+// fell behind. Each chart is one measure, so there's only one y-axis.
+function compareTimeline(fa, fb, ga, gb, A, B) {
+  const xMax = Math.max(fa.endTime - fa.startTime, fb.endTime - fb.startTime);
+  const plain = (s) => s.replace(/&[^;]+;/g, (m) => ({ '&amp;': '&', '&#39;': "'", '&quot;': '"', '&lt;': '<', '&gt;': '>' })[m] || m);
+  const health = lineChart([{ label: plain(A), points: bossHealth(ga?.health, fa) }, { label: plain(B), points: bossHealth(gb?.health, fb) }],
+    { label: 'Boss health over time in both pulls', yMax: 100, yFmt: (v) => `${Math.round(v)}%`, xMax });
+  const dps = lineChart([{ label: plain(A), points: raidDps(ga?.damage, fa) }, { label: plain(B), points: raidDps(gb?.damage, fb) }],
+    { label: 'Raid DPS over time in both pulls', yFmt: fmtNum, xMax });
+  if (!health && !dps) {
+    return '<section class="card"><h2>Over time</h2><p class="muted">Couldn\'t load boss health or raid DPS over time for these pulls.</p></section>';
+  }
+  return `<section class="card timeline"><h2>Over time</h2>
+    ${health ? `<h3>Boss health</h3>${health}` : '<p class="muted">Boss health over time isn\'t available for these pulls.</p>'}
+    ${dps ? `<h3>Raid DPS <span class="muted small">(10-second average)</span></h3>${dps}` : '<p class="muted">Raid DPS over time isn\'t available for these pulls.</p>'}
+    <p class="hint">Hover the charts for both pulls' values every 5 seconds. Where the later pull's line is lower on boss health, it was ahead.</p>
+  </section>`;
+}
+
 // Two pulls of one boss. r.fight is a pull in r.code; r.compare is a pull in r.code2 when comparing across logs
 // (this week against last), else in the same log. Across logs without r.compare, the other log's kill (or best
 // wipe) is picked. The earlier pull is always on the left.
@@ -788,6 +808,7 @@ async function renderCompare(r) {
     fetchEnemyDebuffs(s.r.host, s.r.code, s.fight),
     fetchRaidBuffEvents(s.r.host, s.r.code, [s.fight.id]),
     fetchNamedCasts(s.r.host, s.r.code, [s.fight.id], RAID_COOLDOWNS),
+    fetchFightGraphs(s.r.host, s.r.code, s.fight),
   ]);
   const [da, db] = await Promise.all([load(sa), load(sb)]);
   const side = (s, [detail, mech, enemyDebuffs, buffEvents, cdCasts]) => ({
@@ -802,6 +823,7 @@ async function renderCompare(r) {
   };
   const A = label(sa);
   const B = label(sb);
+  const timelineHtml = compareTimeline(fa, fb, da[5], db[5], A, B);
   const pullLinkOf = (s, text) => `<a href="${href({ ...s.r, fight: s.fight.id, compare: null })}">${text}</a>`;
   const pullLink = (f, text) => pullLinkOf(f === fa ? c.a : c.b, text);
   const headRow = (first) => `<thead><tr><th>${first}</th><th>${pullLink(fa, A)}</th><th>${pullLink(fb, B)}</th></tr></thead>`;
@@ -894,12 +916,12 @@ async function renderCompare(r) {
   view.innerHTML = `
     ${reportHeader(r, report, [{ label: `${esc(fa.name)} · ${crossLog ? `compare with ${esc(fmtDay(other.report.startTime))}` : 'compare'}` }])}
     ${tabbed('fl.tab.compare', [
-    { id: 'overview', label: 'Overview', html: `${outcome}${deathsHtml}` },
+    { id: 'overview', label: 'Overview', html: `${outcome}${timelineHtml}${deathsHtml}` },
     { id: 'mechanics', label: 'Mechanics & cooldowns', html: mechanicsHtml },
     { id: 'players', label: 'Players', html: playersHtml },
     { id: 'setup', label: 'Setup', html: setupHtml },
   ])}
-    ${rawBlock('compare', { a: { ...c.a, lk: undefined, players: [...c.a.players.values()], cooldowns: [...c.a.cooldowns] }, b: { ...c.b, lk: undefined, players: [...c.b.players.values()], cooldowns: [...c.b.cooldowns] } })}`;
+    ${rawBlock('timeline graphs', { a: da[5], b: db[5] })}${rawBlock('compare', { a: { ...c.a, lk: undefined, players: [...c.a.players.values()], cooldowns: [...c.a.cooldowns] }, b: { ...c.b, lk: undefined, players: [...c.b.players.values()], cooldowns: [...c.b.cooldowns] } })}`;
   bindTabs();
   bindRefresh(r);
   $('#compare-other')?.addEventListener('change', (e) => { location.hash = href({ ...r, compare: Number(e.target.value) }); });

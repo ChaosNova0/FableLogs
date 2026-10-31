@@ -24,7 +24,8 @@ A static HTML5 site: paste a Warcraft Logs report link and get a plain-language 
 - **Progression charts:** fight left at the end of each pull, per boss tonight and across nights on the guild page.
 - **Compare two pulls:** any two pulls of a boss, in the same log or across logs (paste the other log on a pull page),
   side by side: outcome, deaths, avoidable hits, interrupts, raid cooldown timings, per-player output per second
-  alive with the biggest drops first, roster and buff changes.
+  alive with the biggest drops first, roster and buff changes, plus boss health and raid DPS over time on a shared
+  time axis.
 
 Run the rule tests by serving the folder and opening `/tests/analysis.html`.
 To see the UI without a Warcraft Logs client, open `/tests/preview.html`. It serves a made-up raid night through a stubbed API
@@ -76,6 +77,7 @@ published; `tests/` is left out because the preview page writes a fake login tok
 | `js/buffs.js` | Raid buff and debuff coverage |
 | `js/charts.js` | Inline SVG progression charts |
 | `js/compare.js` | Two pulls of a boss side by side |
+| `js/timeline.js` | Raid DPS and boss health over a pull, from graph data |
 | `js/app.js` | Routing and rendering |
 
 Turn on **Show raw API data** in Settings to see exactly what Warcraft Logs returned. This helps when tuning a rule.

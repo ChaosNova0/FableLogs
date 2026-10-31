@@ -621,6 +621,26 @@ const cross = comparePulls(sA, sX);
 check('compare across logs: players matched by name', cross.players.find((p) => p.key === 'P1-')?.a?.pid === 1 && cross.players.find((p) => p.key === 'P1-')?.b?.pid === 7
   && cross.diedBoth.join() === 'P2-' && cross.swappedIn.join() === '9' && cross.swappedOut.join() === '3', JSON.stringify({ d: cross.diedBoth, i: cross.swappedIn, o: cross.swappedOut }));
 
+// ---------- timeline ----------
+const { graphSeries, raidDps, bossHealth, smooth } = await import('../js/timeline.js');
+const tFight = { startTime: 10000, endTime: 40000, kill: true };
+const gPlain = { data: { series: [{ name: 'A', type: 'Mage', pointStart: 10000, pointInterval: 1000, data: [100, 200] }, { name: 'B', type: 'Rogue', pointStart: 10000, pointInterval: 1000, data: [50, 50] }] } };
+const gPairs = { series: [{ name: 'A', type: 'Mage', data: [[10000, 100], [11000, 200]] }] };
+check('timeline: both graph shapes', JSON.stringify(graphSeries(gPlain)[0].points) === '[[10000,100],[11000,200]]' && JSON.stringify(graphSeries(gPairs)[0].points) === '[[10000,100],[11000,200]]');
+const rd = raidDps(gPlain, tFight);
+check('timeline: raid DPS summed and made pull-relative', rd.length === 2 && rd[0][0] === 0 && rd[1][0] === 1000 && Math.abs(rd[0][1] - 200) < 1e-9, JSON.stringify(rd));
+check('timeline: smoothing averages the window', JSON.stringify(smooth([[0, 0], [1000, 10], [20000, 5]], 4000)) === '[[0,5],[1000,5],[20000,5]]');
+const hp = bossHealth({ series: [
+  { name: 'Add', type: 'NPC', pointStart: 10000, pointInterval: 10000, data: [5e6, 1e6] },
+  { name: 'Boss', type: 'Boss', pointStart: 10000, pointInterval: 10000, data: [80e6, 40e6, 8e6] },
+] }, tFight);
+check('timeline: boss health picks the boss, scales to %, kill ends at 0', hp[0][1] === 100 && hp[1][1] === 50 && hp[2][1] === 10 && hp[hp.length - 1][0] === 30000 && hp[hp.length - 1][1] === 0, JSON.stringify(hp));
+check('timeline: missing graphs', raidDps(null, tFight).length === 0 && bossHealth(undefined, tFight).length === 0);
+const { lineChart } = await import('../js/charts.js');
+const lc = lineChart([{ label: 'Pull 2', points: [[0, 10], [60000, 20]] }, { label: 'Pull 3 <kill>', points: [[0, 15], [90000, 5]] }], { label: 'x', yFmt: String });
+check('line chart: two lines, legend, escaped hover', (lc.match(/class="lc-line/g) || []).length === 2 && lc.includes('lc-key-b') && lc.includes('Pull 3 &lt;kill&gt;') && lc.includes('<title>'));
+check('line chart: nothing to draw', lineChart([{ label: 'a', points: [] }, { label: 'b', points: [[0, 1]] }], { label: 'x' }) === '');
+
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
 </script>

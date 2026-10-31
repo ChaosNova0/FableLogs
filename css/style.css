@@ -551,3 +551,17 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .compare-log { display: flex; gap: .5rem; align-items: center; flex: 1 1 360px; flex-wrap: wrap; margin: 0; }
 .compare-log input { flex: 1 1 240px; min-width: 0; }
 .compare-log .form-error { flex-basis: 100%; font-size: .85rem; }
+
+/* ---------- compare timeline ---------- */
+
+.line-chart { margin: .5rem 0 1rem; }
+.line-chart svg { display: block; width: 100%; height: auto; }
+.lc-line { fill: none; stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+.lc-a { stroke: var(--muted); stroke-dasharray: 5 4; }
+.lc-b { stroke: var(--accent); }
+.lc-hit { fill: transparent; }
+.lc-hit:hover { fill: color-mix(in srgb, var(--text) 6%, transparent); }
+.lc-key { display: inline-block; width: 18px; vertical-align: middle; margin-right: .35rem; }
+.lc-key-a { border-top: 2px dashed var(--muted); }
+.lc-key-b { border-top: 2px solid var(--accent); margin-left: .6rem; }
+.line-chart + h3, .timeline h3 { margin: .25rem 0 0; font-size: .95rem; }

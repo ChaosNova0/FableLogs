@@ -258,6 +258,19 @@ function respond(query, variables) {
     for (const m of query.matchAll(/([dh])(\d+): events/g)) r[`${m[1]}${m[2]}`] = { data: m[2] === '0' ? windowEvents[fid].filter((e) => (m[1] === 'd') === (e.type === 'damage')) : [] };
     return wrap(r);
   }
+  if (query.includes('graph(dataType: DamageDone')) {
+    // One pull over time: each player's DPS every second, and the boss's hit points falling to where the pull ended.
+    const secs = Math.round((fight.endTime - fight.startTime) / 1000);
+    const wave = (i, k) => 1 + 0.25 * Math.sin((i + k * 7) / 9) + (i < 40 ? 0.35 : 0);
+    const series = PLAYERS.filter(([, , , spec]) => ROLE[spec] !== 'healer').map(([id, name, cls]) => ({
+      name, type: cls, pointStart: fight.startTime, pointInterval: 1000,
+      data: Array.from({ length: secs }, (_, i) => Math.round((120_000 + id * 6000) * wave(i, id) * (fight.kill ? 1.05 : 1))),
+    }));
+    const endPct = fight.kill ? 0 : fight.bossPercentage;
+    const health = [{ name: BOSSES[fight.encounterID][0], type: 'Boss', pointStart: fight.startTime, pointInterval: 1000,
+      data: Array.from({ length: secs }, (_, i) => Math.round(100e6 * (1 - (1 - endPct / 100) * Math.pow(i / secs, 0.9)))) }];
+    return wrap({ damage: { data: { series } }, health: { data: { series: health } } });
+  }
   if (query.includes('rankings(')) return wrap({ rankings: rankings(fight) });
   if (query.includes('buffs: table(dataType: Buffs')) {
     // One player's aura uptimes (ms): Frostbyte as a Nether Tempest / Invocation frost mage, Shank as combat.

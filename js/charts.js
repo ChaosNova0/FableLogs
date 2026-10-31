@@ -53,3 +53,59 @@ export function progressChart(points, label) {
     <figcaption class="pc-legend"><span class="pc-key-line"></span>Each pull <span class="pc-key-best"></span>Best so far <span class="pc-key-kill"></span>Kill</figcaption>
   </figure>`;
 }
+
+const LW = 760;
+const LH = 170;
+const LPAD = { top: 10, right: 14, bottom: 22, left: 46 };
+
+const mmss = (ms) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
+
+// The value of a [t, v] line at time t (the nearest earlier point), or null past its end.
+function valueAt(points, t) {
+  if (!points.length || t > points[points.length - 1][0]) return null;
+  let v = points[0][1];
+  for (const [u, w] of points) { if (u > t) break; v = w; }
+  return v;
+}
+
+/**
+ * Two pulls on one time axis (ms into the pull): one line each, A dashed and B solid, with a legend and a hover
+ * readout every 5 seconds. One measure per chart, so there's only ever one y-axis.
+ * @param series  [{ label, points: [[t, v]] }] — exactly the two pulls, earlier first
+ * @param opts    { label (accessible name), yMax (else the data's max), yFmt (tick and readout text), xMax }
+ */
+export function lineChart(series, opts) {
+  const lines = series.filter((s) => s.points.length > 1);
+  if (!lines.length) return '';
+  const xMax = Math.max(opts.xMax || 0, ...lines.map((s) => s.points[s.points.length - 1][0]), 1);
+  const yMax = opts.yMax ?? Math.max(...lines.flatMap((s) => s.points.map(([, v]) => v)), 1) * 1.08;
+  const fmt = opts.yFmt || String;
+  const plotW = LW - LPAD.left - LPAD.right;
+  const plotH = LH - LPAD.top - LPAD.bottom;
+  const x = (t) => LPAD.left + (t / xMax) * plotW;
+  const y = (v) => LPAD.top + (1 - Math.min(1, Math.max(0, v / yMax))) * plotH;
+
+  const yTicks = [0, 0.5, 1].map((f) => f * yMax);
+  const grid = yTicks.map((v) => `<line class="pc-grid" x1="${LPAD.left}" x2="${LPAD.left + plotW}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(1)}"/>
+    <text class="pc-axis" x="${LPAD.left - 6}" y="${(y(v) + 3.5).toFixed(1)}" text-anchor="end">${esc(fmt(v))}</text>`).join('');
+  const stepX = xMax > 600_000 ? 120_000 : 60_000;
+  const xTicks = [];
+  for (let t = 0; t <= xMax; t += stepX) xTicks.push(`<text class="pc-axis" x="${x(t).toFixed(1)}" y="${LH - 6}" text-anchor="middle">${mmss(t)}</text>`);
+
+  const paths = series.map((s, i) => (s.points.length > 1
+    ? `<path class="lc-line lc-${i ? 'b' : 'a'}" d="${s.points.map(([t, v], j) => `${j ? 'L' : 'M'}${x(t).toFixed(1)},${y(v).toFixed(1)}`).join(' ')}"/>`
+    : '')).join('');
+
+  // Hover readout: a hit band every 5 seconds whose tooltip gives both pulls' values at that moment.
+  const bands = [];
+  const bandMs = 5000;
+  for (let t = 0; t < xMax; t += bandMs) {
+    const vals = series.map((s) => { const v = valueAt(s.points, t + bandMs / 2); return `${s.label}: ${v == null ? 'over' : fmt(v)}`; });
+    bands.push(`<rect class="lc-hit" x="${x(t).toFixed(1)}" y="${LPAD.top}" width="${(x(t + bandMs) - x(t)).toFixed(1)}" height="${plotH}"><title>${esc(`${mmss(t)}–${mmss(t + bandMs)}\n${vals.join('\n')}`)}</title></rect>`);
+  }
+
+  return `<figure class="line-chart">
+    <svg viewBox="0 0 ${LW} ${LH}" role="img" aria-label="${esc(opts.label)}">${grid}${xTicks.join('')}${paths}${bands.join('')}</svg>
+    <figcaption class="pc-legend">${series.map((s, i) => `<span class="lc-key lc-key-${i ? 'b' : 'a'}"></span>${esc(s.label)}`).join(' ')}</figcaption>
+  </figure>`;
+}

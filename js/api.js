@@ -486,6 +486,23 @@ export async function fetchRaidBuffEvents(host, code, fightIDs) {
   }
 }
 
+// One pull over time, for the compare page's timeline: raid damage done, and enemy hit points (resource 1000 is
+// health on Warcraft Logs). Either can come back null on its own; both null on failure. Not yet checked against a
+// real log, so the compare page shows the raw result for checking.
+export async function fetchFightGraphs(host, code, fight) {
+  try {
+    const { data } = await gql(host, `query ($code: String!, $f: [Int]!) { reportData { report(code: $code) {
+      damage: graph(dataType: DamageDone, fightIDs: $f)
+      health: graph(dataType: Resources, hostilityType: Enemies, abilityID: 1000, fightIDs: $f)
+    } } }`, { code, f: [fight.id] }, { cacheKey: `${code}:graphs:${fight.id}` });
+    const r = data?.reportData?.report || {};
+    return { damage: r.damage ?? null, health: r.health ?? null };
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof RateLimitError) throw err;
+    return { damage: null, health: null };
+  }
+}
+
 // Casts of the given spells (raid cooldowns, Bloodlust) for any set of pulls, by name. Empty on failure.
 export async function fetchNamedCasts(host, code, fightIDs, names) {
   try {
