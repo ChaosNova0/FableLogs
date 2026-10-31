@@ -4,12 +4,12 @@ import { getClientId, setClientId, getToken, login, logout, handleRedirect, redi
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
-  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchDifficultyNames, guildCachePrefix,
+  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchDifficultyNames, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
-import { summarizeGuild, summarizeAttendance } from './guild.js';
+import { summarizeGuild, buildRoster } from './guild.js';
 import { analyzePlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
@@ -719,20 +719,52 @@ function nightsHtml(r, gs) {
     </tbody></table></section>`;
 }
 
-function attendanceHtml(att) {
-  if (!att) return '<section class="card"><p class="muted">Couldn\'t load attendance for this guild. Warcraft Logs only shares it for guilds with attendance tracking.</p></section>';
-  if (!att.rows.length) return '<section class="card"><p class="muted">No attendance recorded yet.</p></section>';
-  return `<section class="card"><h2>Attendance</h2>
-    <p class="hint">Share of the guild's last ${att.total} raids each player attended, from Warcraft Logs' attendance tracking. Benched counts as attended.</p>
-    <table class="table attendance"><thead><tr><th>Player</th><th class="num">Raids</th><th>Attendance</th><th class="num">Benched</th></tr></thead><tbody>
-    ${att.rows.map((p) => `<tr>
-      <td><span class="player" style="--cls:${classColor(p.type)}">${esc(p.name)}</span></td>
-      <td class="num">${p.present + p.benched} / ${att.total}</td>
-      <td><span class="meter"><span class="meter-fill ${p.pct >= 0.9 ? 'good' : p.pct >= 0.6 ? 'ok' : 'low'}" style="width:${(p.pct * 100).toFixed(0)}%"></span></span>
-        <span class="meter-val">${Math.round(p.pct * 100)}%</span></td>
-      <td class="num">${p.benched || ''}</td>
-    </tr>`).join('')}
-    </tbody></table></section>`;
+const ROSTER_STATUS = {
+  raiding: ['kill', 'Raiding'],
+  lapsed: ['lapsed', 'Lapsed'],
+  idle: ['idle', 'Not raiding'],
+};
+
+function rosterRow(p, total, hasMembers) {
+  const [cls, label] = ROSTER_STATUS[p.status];
+  const raided = p.present + p.benched;
+  return `<tr>
+    <td><span class="player" style="--cls:${classColor(p.className)}">${esc(p.name)}</span>
+      ${hasMembers && !p.member ? '<span class="muted">· not in guild</span>' : ''}</td>
+    <td class="muted">${esc(p.className || '')}</td>
+    <td class="muted">${p.rank == null ? '' : p.rank === 0 ? 'Guild Master' : `Rank ${Number(p.rank)}`}</td>
+    <td>${total ? `<span class="meter"><span class="meter-fill ${p.pct >= 0.9 ? 'good' : p.pct >= 0.6 ? 'ok' : 'low'}" style="width:${(p.pct * 100).toFixed(0)}%"></span></span>
+      <span class="meter-val">${raided}/${total}</span>` : ''}</td>
+    <td class="muted">${p.lastRaid ? esc(new Date(p.lastRaid).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) : ''}</td>
+    <td><span class="badge ${cls}">${label}</span></td>
+  </tr>`;
+}
+
+function rosterHtml(roster) {
+  if (!roster.rows.length) {
+    return '<section class="card"><p class="muted">No roster available: Warcraft Logs shared neither a member list nor attendance for this guild.</p></section>';
+  }
+  const c = roster.counts;
+  const active = roster.rows.filter((p) => p.status !== 'idle');
+  const idle = roster.rows.filter((p) => p.status === 'idle');
+  const head = '<thead><tr><th>Player</th><th>Class</th><th>Rank</th><th>Raids</th><th>Last raid</th><th>Status</th></tr></thead>';
+  const summary = [
+    roster.hasMembers ? `<b>${c.members}</b> member${c.members === 1 ? '' : 's'} on Warcraft Logs` : '',
+    `<b>${c.raiding}</b> raiding in the last 3 raids`,
+    c.lapsed ? `<b>${c.lapsed}</b> lapsed` : '',
+    c.outsiders ? `<b>${c.outsiders}</b> raider${c.outsiders === 1 ? '' : 's'} from outside the guild` : '',
+  ].filter(Boolean).join(' · ');
+  return `<section class="card"><h2>Roster</h2>
+    <p>${summary}</p>
+    ${roster.composition.length ? `<div class="composition">${roster.composition.map(([name, n]) => `<span class="comp-chip" style="--cls:${classColor(name)}">
+      <span class="player">${esc(name || 'Unknown')}</span> ${n}</span>`).join('')}</div>` : ''}
+    ${roster.hasMembers ? '' : '<p class="hint">Warcraft Logs didn\'t share this guild\'s member list, so the roster only shows people seen in its raids.</p>'}
+    ${active.length ? `<table class="table roster">${head}<tbody>${active.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table>` : ''}
+    ${idle.length ? `<details class="idle-members"><summary>${idle.length} member${idle.length === 1 ? '' : 's'} not in these raids</summary>
+      <table class="table roster">${head}<tbody>${idle.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table></details>` : ''}
+    <p class="hint">Raids are the guild's last ${roster.total} logged raids, from Warcraft Logs' attendance tracking. Benched counts as attended.
+      "Lapsed" means they raided earlier in that window but not in the last 3.</p>
+  </section>`;
 }
 
 async function renderGuild(r) {
@@ -744,24 +776,25 @@ async function renderGuild(r) {
   const limit = GUILD_LIMITS.includes(saved) ? saved : 25;
 
   setLoading(`Loading ${guild.name}'s reports…`);
-  const [reports, attendance] = await Promise.all([
+  const [reports, attendance, members] = await Promise.all([
     fetchGuildReports(r.host, guild.id, limit),
     fetchGuildAttendance(r.host, guild.id, limit),
+    fetchGuildMembers(r.host, guild.id),
   ]);
   remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
 
   const difficultyNames = await fetchDifficultyNames(r.host, reports.map((rep) => rep.zone?.id).filter((id) => id != null));
   const gs = summarizeGuild(reports, { difficultyNames });
-  const att = attendance ? summarizeAttendance(attendance) : null;
+  const roster = buildRoster(attendance, members);
 
   view.innerHTML = `
     ${guildHeader(r, guild, limit)}
     ${reports.length ? tabbed('fl.tab.guild', [
     { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>${progressionHtml(r, gs)}` },
     { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs) },
-    { id: 'attendance', label: 'Attendance', html: attendanceHtml(att) },
+    { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}
-    ${rawBlock('guild', guild)}${rawBlock('reports', reports)}${rawBlock('attendance', attendance)}`;
+    ${rawBlock('guild', guild)}${rawBlock('reports', reports)}${rawBlock('attendance', attendance)}${rawBlock('members', members?.members.slice(0, 20))}`;
 
   bindTabs();
   $('#guild-limit').addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });

@@ -210,6 +210,30 @@ export async function fetchDifficultyNames(host, zoneIds) {
   }
 }
 
+// The guild's member list plus the site's class names. Returns null when the site won't share members
+// (e.g. unclaimed guilds), so the roster can fall back to who was seen in raids.
+export async function fetchGuildMembers(host, guildId) {
+  try {
+    const members = [];
+    let classes = [];
+    for (let page = 1; page <= 10; page++) {
+      const { data } = await gql(host, `query ($gid: Int!, $page: Int) {
+        ${page === 1 ? 'gameData { classes { id name } }' : ''}
+        guildData { guild(id: $gid) { members(limit: 100, page: $page) { data { id name guildRank classID level } has_more_pages } } }
+      }`, { gid: guildId, page }, { cacheKey: `${guildCachePrefix(guildId)}:members:${page}:${hourBucket()}` });
+      if (page === 1) classes = data?.gameData?.classes || [];
+      const list = data?.guildData?.guild?.members;
+      if (!list) return null;
+      members.push(...(list.data || []));
+      if (!list.has_more_pages) break;
+    }
+    return { members, classNames: new Map(classes.map((c) => [c.id, c.name])) };
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return null;
+  }
+}
+
 // Attendance for the guild's recent raids. Returns null rather than failing the page.
 export async function fetchGuildAttendance(host, guildId, limit) {
   try {

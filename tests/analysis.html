@@ -306,6 +306,27 @@ const att = summarizeAttendance([
 check('attendance: totals', att.total === 3 && att.rows[0].name === 'A' && att.rows[0].pct === 1);
 check('attendance: benched counts', att.rows[1].benched === 1 && Math.abs(att.rows[1].pct - 2 / 3) < 1e-9);
 
+// Roster: members merged with attendance (nights newest first after sorting).
+const { buildRoster } = await import('../js/guild.js');
+const rn = (code, t, presences) => ({ code, startTime: t, players: Object.entries(presences).map(([name, presence]) => ({ name, type: name === 'Pug' ? 'Rogue' : 'Mage', presence })) });
+const rosterAtt = [
+  rn('r1', 1, { Ann: 1, Bob: 1, Pug: 0 }), rn('r2', 2, { Ann: 1, Bob: 0, Pug: 0 }), rn('r3', 3, { Ann: 1, Bob: 0, Pug: 0 }),
+  rn('r4', 4, { Ann: 1, Bob: 0, Pug: 1 }),
+];
+const rosterMembers = { members: [{ name: 'Ann', guildRank: 0, classID: 4 }, { name: 'Bob', guildRank: 2, classID: 4 }, { name: 'Alt', guildRank: 5, classID: 7 }], classNames: new Map([[4, 'Mage'], [7, 'Priest']]) };
+const ros = buildRoster(rosterAtt, rosterMembers);
+const rrow = (n) => ros.rows.find((x) => x.name === n);
+check('roster: raiding in last 3', rrow('Ann').status === 'raiding' && rrow('Pug').status === 'raiding');
+check('roster: lapsed when only older raids', rrow('Bob').status === 'lapsed', rrow('Bob').status);
+check('roster: idle member', rrow('Alt').status === 'idle' && rrow('Alt').className === 'Priest');
+check('roster: outsider flagged', rrow('Pug').member === false && ros.counts.outsiders === 1);
+check('roster: counts', ros.counts.members === 3 && ros.counts.raiding === 2 && ros.counts.lapsed === 1 && ros.counts.idle === 1, JSON.stringify(ros.counts));
+check('roster: last raid date', rrow('Bob').lastRaid === 1 && rrow('Ann').lastRaid === 4);
+check('roster: composition of raiders', ros.composition.map(([c, n]) => `${c}:${n}`).join() === 'Mage:1,Rogue:1', JSON.stringify(ros.composition));
+check('roster: raiding sorted first', ros.rows[0].status === 'raiding' && ros.rows[ros.rows.length - 1].status === 'idle');
+const noMembers = buildRoster(rosterAtt, null);
+check('roster: no member list falls back to raiders', !noMembers.hasMembers && noMembers.rows.every((x) => x.member) && noMembers.counts.outsiders === 0);
+
 const g1 = parseGuildLink('https://classic.warcraftlogs.com/guild/id/123456');
 check('guild link: by id', g1?.host === 'classic.warcraftlogs.com' && g1.guild.id === 123456, JSON.stringify(g1));
 const g2 = parseGuildLink('https://classic.warcraftlogs.com/guild/us/mirage-raceway/Fable%20Hub');

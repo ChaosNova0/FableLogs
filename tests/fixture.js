@@ -167,8 +167,18 @@ const GUILD_REPORTS = NIGHT_PLAN.map((plan, n) => {
 }).reverse();
 const ATTENDANCE = GUILD_REPORTS.map((r, n) => ({
   code: r.code, startTime: r.startTime, zone: r.zone,
-  players: PLAYERS.map(([id, name, cls]) => ({ name, type: cls, presence: (id === 9 && n % 3 === 0) ? 0 : (id === 5 && n % 4 === 1) ? 2 : (id === 10 && n > 4) ? 0 : 1 })),
+  // n = 0 is the newest raid. Rimeheart stopped coming three raids ago, so shows as lapsed.
+  players: PLAYERS.map(([id, name, cls]) => ({ name, type: cls, presence: (id === 9 && n % 3 === 0) ? 0 : (id === 5 && n % 4 === 1) ? 2 : (id === 10 && n < 3) ? 0 : 1 })),
 }));
+// Warcraft Logs class ids are alphabetical. Hexxa raids but isn't in the guild; three alts never raid.
+const CLASS_IDS = { DeathKnight: 1, Druid: 2, Hunter: 3, Mage: 4, Monk: 5, Paladin: 6, Priest: 7, Rogue: 8, Shaman: 9, Warlock: 10, Warrior: 11 };
+const CLASS_LIST = Object.entries(CLASS_IDS).map(([name, id]) => ({ id, name: name === 'DeathKnight' ? 'Death Knight' : name }));
+const MEMBERS = [
+  ...PLAYERS.filter(([id]) => id !== 9).map(([id, name, cls]) => ({ id: 1000 + id, name, guildRank: id === 1 ? 0 : id <= 5 ? 1 : 3, classID: CLASS_IDS[cls], level: 90 })),
+  { id: 2001, name: 'Bulwarkalt', guildRank: 4, classID: CLASS_IDS.Paladin, level: 87 },
+  { id: 2002, name: 'Lumenbank', guildRank: 5, classID: CLASS_IDS.Priest, level: 1 },
+  { id: 2003, name: 'Oldfriend', guildRank: 3, classID: CLASS_IDS.Druid, level: 90 },
+];
 
 function respond(query, variables) {
   const rate = { rateLimitData: { limitPerHour: 3600, pointsSpentThisHour: 212, pointsResetIn: 1800 } };
@@ -178,6 +188,9 @@ function respond(query, variables) {
   if (query.includes('worldData')) {
     const zones = [...query.matchAll(/z(\d+): zone/g)].map((m) => [`z${m[1]}`, { id: Number(m[1]), difficulties: [{ id: 3, name: 'Normal' }, { id: 4, name: 'Heroic' }] }]);
     return { data: { worldData: Object.fromEntries(zones) } };
+  }
+  if (query.includes('members(')) {
+    return { data: { gameData: { classes: CLASS_LIST }, guildData: { guild: { members: { data: MEMBERS, has_more_pages: false } } } } };
   }
   if (query.includes('attendance(')) return { data: { guildData: { guild: { attendance: { data: ATTENDANCE.slice(0, variables.limit) } } } } };
   if (query.includes('reports(guildID')) return { data: { reportData: { reports: { data: GUILD_REPORTS.slice(0, variables.limit) } } } };

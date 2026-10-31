@@ -151,6 +151,63 @@ function guildTakeaways(nights, bosses) {
   return out;
 }
 
+const RECENT_RAIDS = 3;
+
+/**
+ * Roster: the guild's members merged with who actually raided.
+ * @param attendance  guild.attendance data (newest first), or null
+ * @param roster      fetchGuildMembers() result { members, classNames }, or null when the site won't share it
+ * Status: 'raiding' (in one of the last 3 raids), 'lapsed' (raided earlier in the window only),
+ *         'idle' (member with no raids in the window); `member` is false for raiders not on the member list.
+ */
+export function buildRoster(attendance, roster) {
+  const nights = [...(attendance || [])].sort((a, b) => b.startTime - a.startTime);
+  const recent = new Set(nights.slice(0, RECENT_RAIDS).map((n) => n.code));
+  const att = summarizeAttendance(nights);
+  const byName = new Map();
+
+  for (const m of roster?.members || []) {
+    byName.set(m.name, {
+      name: m.name, className: roster.classNames.get(m.classID) || '', rank: m.guildRank ?? null, level: m.level ?? null,
+      member: true, present: 0, benched: 0, pct: 0, lastRaid: null, status: 'idle',
+    });
+  }
+  for (const p of att.rows) {
+    const row = byName.get(p.name) || { name: p.name, className: p.type, rank: null, level: null, member: !roster, status: 'idle' };
+    Object.assign(row, { className: row.className || p.type, present: p.present, benched: p.benched, pct: p.pct });
+    byName.set(p.name, row);
+  }
+  for (const n of nights) {
+    for (const p of n.players || []) {
+      if (p.presence !== 1 && p.presence !== 2) continue;
+      const row = byName.get(p.name);
+      if (!row.lastRaid || n.startTime > row.lastRaid) row.lastRaid = n.startTime;
+      row.status = recent.has(n.code) ? 'raiding' : row.status === 'raiding' ? 'raiding' : 'lapsed';
+    }
+  }
+
+  const order = { raiding: 0, lapsed: 1, idle: 2 };
+  const rows = [...byName.values()].sort((a, b) => order[a.status] - order[b.status] || b.pct - a.pct
+    || (a.rank ?? 99) - (b.rank ?? 99) || a.name.localeCompare(b.name));
+
+  const composition = new Map();
+  for (const r of rows) if (r.status === 'raiding') composition.set(r.className, (composition.get(r.className) || 0) + 1);
+
+  return {
+    rows,
+    total: att.total,
+    hasMembers: !!roster,
+    counts: {
+      members: rows.filter((r) => r.member).length,
+      raiding: rows.filter((r) => r.status === 'raiding').length,
+      lapsed: rows.filter((r) => r.status === 'lapsed').length,
+      idle: rows.filter((r) => r.status === 'idle').length,
+      outsiders: roster ? rows.filter((r) => !r.member).length : 0,
+    },
+    composition: [...composition.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+  };
+}
+
 /**
  * @param attendance  guild.attendance data: [{ code, startTime, players: [{ name, type, presence }] }]
  *                    presence 1 = in the raid, 2 = benched; anything else counts as absent.
