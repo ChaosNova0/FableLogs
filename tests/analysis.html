@@ -495,6 +495,17 @@ const renamed = debuffCoverage({ auras: [{ name: 'Mystic Touch', guid: 113746, t
 check('debuffs: matched by spell id', renamed.find((d) => d.key === 'armor').uptime === 0.74 && renamed.find((d) => d.key === 'magic').uptime === 0.67, JSON.stringify(renamed));
 check('buffs: matched by spell id', buffCoverage([1], [{ sourceID: 1, auras: [{ ability: 1459, name: 'Something Else' }] }], blk, [])
   .filter((c) => c.have).map((c) => c.key).join() === 'sp,crit');
+// The pull snapshot can leave a buff out; its first event in the pull being a fade or refresh shows it was up.
+const slk = buildLookups({ masterData: { actors: [], abilities: [{ gameID: 117666, name: 'Legacy of the Emperor' }, { gameID: 6673, name: 'Battle Shout' }] } });
+const snap = [{ sourceID: 1, auras: [] }, { sourceID: 2, auras: [] }, { sourceID: 3, auras: [] }];
+const bev = [
+  { timestamp: 500, type: 'removebuff', targetID: 1, abilityGameID: 117666 },  // up at the pull, faded
+  { timestamp: 900, type: 'applybuff', targetID: 1, abilityGameID: 117666 },
+  { timestamp: 400, type: 'applybuff', targetID: 2, abilityGameID: 117666 },   // only cast mid-pull: wasn't up
+  { timestamp: 600, type: 'refreshbuff', targetID: 3, abilityGameID: 6673 },   // refreshed: was up
+];
+const evCov = buffCoverage([1, 2, 3], snap, slk, [], bev);
+check('buffs: up at the pull from buff events', evCov.find((c) => c.key === 'stats').have === 1 && evCov.find((c) => c.key === 'ap').have === 1, JSON.stringify(evCov.slice(0, 3)));
 const nbc = nightBuffCoverage([{ fight: { id: 1 }, coverage: cov }, { fight: { id: 2 }, coverage: null }, { fight: { id: 3 }, coverage: cov.map((c) => (c.key === 'stats' ? { ...c, have: 0, pct: 0 } : c)) }]);
 const nbStats = nbc.find((b) => b.key === 'stats');
 check('buffs: night coverage', nbc[0].pulls === 2 && nbStats.full === 0 && nbStats.missing.map((f) => f.id).join() === '3' && nbc.find((b) => b.key === 'ap').full === 2, JSON.stringify(nbStats));

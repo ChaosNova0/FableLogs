@@ -32,18 +32,33 @@ function providers(entry, classSpecs) {
   return { who, hunter };
 }
 
+// Every raid buff name, for one filtered Buffs events query.
+export const RAID_BUFF_NAMES = [...new Set(RAID_BUFFS.flatMap((b) => b.names))];
+
+// A buff whose first event on a player in the pull is it fading or being refreshed was already up at the pull.
+const WAS_UP = new Set(['removebuff', 'refreshbuff', 'removebuffstack', 'applybuffstack']);
+
 /**
  * Raid buffs at the pull.
  * @param pids        players in the pull
  * @param combatants  CombatantInfo events for the pull
  * @param classSpecs  ["Class-Spec"] for those players (spec may be missing: "Class-")
+ * @param buffEvents  raid buff events in the pull (fetchRaidBuffEvents). On a real log the pull snapshot left out a
+ *                    Legacy of the Emperor that the player's buff history shows up from the first second, so a
+ *                    buff also counts when its first event in the pull shows it was already up.
  * Returns null without combatant info; else [{ key, label, have, total, pct, providers, canProvide, hunter }].
  */
-export function buffCoverage(pids, combatants, lk, classSpecs) {
+export function buffCoverage(pids, combatants, lk, classSpecs, buffEvents = []) {
   const infos = pids.map((pid) => combatants.find((c) => c.sourceID === pid)).filter(Boolean);
   if (!infos.length) return null;
+  const first = new Map();
+  for (const e of [...buffEvents].sort((x, y) => x.timestamp - y.timestamp)) {
+    const key = `${e.targetID}:${e.abilityGameID}`;
+    if (!first.has(key)) first.set(key, e);
+  }
+  const upAtPull = (b, pid) => [...first.values()].some((e) => e.targetID === pid && WAS_UP.has(e.type) && matches(b, e.abilityGameID, lk.abilityName(e.abilityGameID)));
   return RAID_BUFFS.map((b) => {
-    const have = infos.filter((c) => (c.auras || []).some((a) => matches(b, a.ability, auraName(a, lk)))).length;
+    const have = infos.filter((c) => (c.auras || []).some((a) => matches(b, a.ability, auraName(a, lk))) || upAtPull(b, c.sourceID)).length;
     const { who, hunter } = providers(b, classSpecs);
     return { key: b.key, label: b.label, have, total: infos.length, pct: have / infos.length, canProvide: who.length > 0, hunter };
   });

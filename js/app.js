@@ -5,7 +5,7 @@ import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
-  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, clearReportCache,
+  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, clearReportCache,
 } from './api.js';
 import { mechanicsFor, trackedNames, analyzeMechanics, nightMechanics } from './mechanics.js';
 import { buffCoverage, debuffCoverage, nightBuffCoverage } from './buffs.js';
@@ -297,19 +297,24 @@ async function renderReport(r) {
   const s = summarizeReport(report, deaths, lk);
   const fightIDs = (report.fights || []).map((f) => f.id);
   const tracked = trackedNames(s.encounters.map((e) => e.name));
-  const [totals, prepData, zones, mech] = fightIDs.length
+  const [totals, prepData, zones, mech, buffEvents] = fightIDs.length
     ? await Promise.all([
       fetchReportTotals(r.host, r.code, fightIDs), fetchReportPrep(r.host, r.code, fightIDs), fetchFightZones(r.host, r.code),
       tracked.avoid.length ? fetchMechanicEvents(r.host, r.code, fightIDs, { avoid: tracked.avoid }) : null,
+      fetchRaidBuffEvents(r.host, r.code, fightIDs),
     ])
-    : [null, null, new Map(), null];
+    : [null, null, new Map(), null, []];
   const kudos = reportKudos({ report, lk, deaths, totals });
   const prep = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions) : null;
   const info = specInfo(lk, [totals?.damage, totals?.healing]);
   const nm = mech ? nightMechanics(report.fights || [], mech.damage, lk, (pid) => info(pid).role, deaths) : null;
   const nightBuffs = prepData ? nightBuffCoverage((report.fights || []).map((f) => {
     const pids = raidPlayers(f, lk);
-    return { fight: f, coverage: buffCoverage(pids, prepData.combatants.filter((c) => c.fight === f.id), lk, pids.map((pid) => info(pid).classSpec)) };
+    return {
+      fight: f,
+      coverage: buffCoverage(pids, prepData.combatants.filter((c) => c.fight === f.id), lk, pids.map((pid) => info(pid).classSpec),
+        buffEvents.filter((e) => e.fight === f.id)),
+    };
   })) : null;
 
   if (!s.encounters.length) {
@@ -632,12 +637,13 @@ async function renderFight(r) {
   const fightDeaths = deaths.filter((d) => d.fight === fight.id);
   setLoading(`Analysing ${fight.name}…`);
   const tracked = trackedNames([fight.name]);
-  const [windows, detail, rankings, mech, enemyDebuffs] = await Promise.all([
+  const [windows, detail, rankings, mech, enemyDebuffs, buffEvents] = await Promise.all([
     fightDeaths.length ? fetchDeathWindows(r.host, r.code, fight, fightDeaths) : [],
     fetchFightDetail(r.host, r.code, fight),
     fetchRankings(r.host, r.code, fight),
     mechanicsFor(fight.name) ? fetchMechanicEvents(r.host, r.code, [fight.id], tracked) : null,
     fetchEnemyDebuffs(r.host, r.code, fight),
+    fetchRaidBuffEvents(r.host, r.code, [fight.id]),
   ]);
 
   const fa = analyzeFight(fight, fightDeaths, windows, lk);
@@ -647,7 +653,7 @@ async function renderFight(r) {
   const ma = mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role, fightDeaths) : null;
   const pids = raidPlayers(fight, lk);
   const classSpecs = pids.map((pid) => info(pid).classSpec);
-  const buffs = buffCoverage(pids, detail.combatants, lk, classSpecs);
+  const buffs = buffCoverage(pids, detail.combatants, lk, classSpecs, buffEvents);
   const debuffs = debuffCoverage(enemyDebuffs, fight, lk, classSpecs);
   const avoidHits = ma ? ma.avoid.reduce((n, a) => n + a.hits, 0) : 0;
 

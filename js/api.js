@@ -3,6 +3,7 @@ import { CONFIG } from './config.js';
 import { getToken, logout } from './auth.js';
 import { cache } from './store.js';
 import { POTION_NAMES } from './mop.js';
+import { RAID_BUFF_NAMES } from './buffs.js';
 
 export class AuthError extends Error {}
 
@@ -471,6 +472,18 @@ export async function fetchMechanicEvents(host, code, fightIDs, { avoid = [], in
     get(interrupt, { dataType: 'Casts', hostilityType: 'Enemies' }, 'enemycasts'),
   ]);
   return { damage, casts };
+}
+
+// Raid buff events (applies, refreshes, fades) for any set of pulls, to tell which buffs were up at the pull when
+// the pull snapshot leaves them out. Empty on failure.
+export async function fetchRaidBuffEvents(host, code, fightIDs) {
+  try {
+    return await fetchAllEvents(host, code, { dataType: 'Buffs', fightIDs, filterExpression: nameFilter(RAID_BUFF_NAMES) },
+      `${code}:raidbuffs:${fightIDs.join(',')}`);
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof RateLimitError) throw err;
+    return [];
+  }
 }
 
 // Debuffs on enemies over one pull, for raid debuff coverage. Null on failure.

@@ -264,6 +264,14 @@ function respond(query, variables) {
     const buffs = { 6: [up('Invocation', 0.78)], 7: [up('Slice and Dice', 0.97)] }[variables.p] || [];
     return wrap({ buffs: { data: { auras: buffs } } });
   }
+  if (query.includes('dataType: Buffs') && query.includes('filterExpression')) {
+    // Raid buff events: Shank's Mark of the Wild is missing from the first pull's snapshot but refreshed mid-pull,
+    // so it was really up at the pull.
+    const want = fightsIn(query) || [];
+    const f1 = FIGHTS[0];
+    const events = want.includes(f1.id) ? [{ timestamp: f1.startTime + 30_000, type: 'refreshbuff', sourceID: 2, targetID: 7, abilityGameID: 1126, fight: f1.id }] : [];
+    return wrap({ events: { data: events, nextPageTimestamp: null } });
+  }
   if (query.includes('dataType: Debuffs') && query.includes('filterExpression')) {
     // Debuffs on the boss by name, from everyone (the app keeps the player's own): Frostbyte's Nether Tempest with one
     // gap, Shank's Revealing Strike patchy, and a second rogue's Revealing Strike that must not count for Shank.
