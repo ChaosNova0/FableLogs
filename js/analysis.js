@@ -346,7 +346,8 @@ export function consumables(fight, combatants, potions, lk) {
     hasInfo: withInfo.length > 0,
     missingFlask: withInfo.filter((r) => !r.flask).map((r) => r.pid),
     missingFood: withInfo.filter((r) => !r.food).map((r) => r.pid),
-    noPotions: rows.filter((r) => !r.prePot && !r.combatPots).map((r) => r.pid),
+    // A mana or healing potion still counts as having used one; healers drink mana potions instead of DPS ones.
+    noPotions: rows.filter((r) => !r.prePot && !r.combatPots && !r.otherPots.length).map((r) => r.pid),
   };
 }
 

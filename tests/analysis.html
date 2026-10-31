@@ -446,7 +446,7 @@ const mlk = buildLookups({
 });
 const thok = { id: 7, name: 'Thok the Bloodthirsty', startTime: 1000, endTime: 61000 };
 const dmg = (ts, target, ab, amount, fightId = 7) => ({ timestamp: ts, type: 'damage', targetID: target, abilityGameID: ab, amount, fight: fightId });
-const mres = analyzeMechanics(thok, [dmg(2000, 1, 10, 100), dmg(3000, 2, 10, 50), dmg(4000, 2, 10, 50), dmg(5000, 3, 11, 10), dmg(99000, 2, 10, 50, 8)], [], [], mlk, (pid) => (pid === 1 ? 'tank' : 'dps'));
+const mres = analyzeMechanics(thok, [dmg(2000, 1, 10, 100), dmg(3000, 2, 10, 50), dmg(9000, 2, 10, 50), dmg(5000, 3, 11, 10), dmg(99000, 2, 10, 50, 8)], [], [], mlk, (pid) => (pid === 1 ? 'tank' : 'dps'));
 const breath = mres.avoid.find((a) => a.name === 'Scorching Breath');
 check('mechanics: tank hits by frontals ignored', breath.hits === 2 && breath.players.length === 1 && breath.players[0].pid === 2, JSON.stringify(breath));
 check('mechanics: other fights ignored', breath.damage === 100);
@@ -467,6 +467,9 @@ check('mechanics: night totals', night.players[0].pid === 2 && night.players[0].
 const ticks = analyzeMechanics(thok, [dmg(2000, 2, 10, 100), { ...dmg(3000, 2, 10, 20), tick: true }, { ...dmg(4000, 2, 10, 20), tick: true }, { ...dmg(5000, 3, 10, 20), tick: true }], [], [], mlk, () => 'dps');
 const tb = ticks.avoid.find((a) => a.name === 'Scorching Breath');
 check('mechanics: ticks are damage, not hits', tb.hits === 1 && tb.damage === 140 && tb.players.length === 1, JSON.stringify(tb));
+// Pulses a second apart (standing in Ravager) are one time caught; a fresh hit after a break counts again.
+const pulses = analyzeMechanics(thok, [10000, 11000, 12000, 13000, 20000].map((ts) => dmg(ts, 2, 10, 10)), [], [], mlk, () => 'dps').avoid.find((a) => a.name === 'Scorching Breath');
+check('mechanics: pulses grouped into times caught', pulses.hits === 2 && pulses.damage === 50, JSON.stringify(pulses));
 // On a wipe, hits after half the raid is dead (the boss turning on whoever's left) don't count.
 const wipeFight = { ...thok, kill: false, friendlyPlayers: [1, 2, 3, 4] };
 const wipeDeaths = [{ fight: 7, timestamp: 10000, targetID: 1 }, { fight: 7, timestamp: 20000, targetID: 4 }];

@@ -107,6 +107,7 @@ export function trackedNames(bossNames) {
 }
 
 const hitSize = (e) => (e.amount || 0) + (e.absorbed || 0);
+const HIT_GAP_MS = 3000;
 
 // When half the raid had died on this pull, or null if it never did. Matches analyzeFight's cut-off for deaths.
 function collapseTime(fight, deaths, lk) {
@@ -137,14 +138,17 @@ export function analyzeMechanics(fight, damage, enemyCasts, interrupts, lk, role
   const avoid = m.avoid.filter((a) => seen.has(a.name)).map((a) => {
     const events = damage.filter((e) => e.type === 'damage' && inFight(e) && e.timestamp <= until && lk.abilityName(e.abilityGameID) === a.name
       && lk.isPlayer(e.targetID) && !(a.tanksOk && roleOf(e.targetID) === 'tank'));
-    // A hit is the initial damage; ticks of a DoT it leaves add to the damage but aren't further hits.
+    // A hit is one time caught by it: DoT ticks it leaves, and the pulses of something like Ravager that hits every
+    // second while you stand in it, add to the damage but only count again after a HIT_GAP_MS break.
     const byPlayer = new Map();
-    for (const e of events) {
-      const p = byPlayer.get(e.targetID) || { pid: e.targetID, hits: 0, damage: 0 };
-      if (!e.tick) p.hits++;
+    for (const e of [...events].sort((x, y) => x.timestamp - y.timestamp)) {
+      const p = byPlayer.get(e.targetID) || { pid: e.targetID, hits: 0, damage: 0, last: -Infinity };
+      if (!e.tick && e.timestamp - p.last > HIT_GAP_MS) p.hits++;
+      p.last = e.timestamp;
       p.damage += hitSize(e);
       byPlayer.set(e.targetID, p);
     }
+    for (const p of byPlayer.values()) delete p.last;
     const players = [...byPlayer.values()].filter((p) => p.hits).sort((x, y) => y.hits - x.hits || y.damage - x.damage);
     return {
       ...a,

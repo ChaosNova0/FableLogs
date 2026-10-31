@@ -555,7 +555,7 @@ function mechanicsFightHtml(ma, lk, r, fight) {
       ${ma.summary.length ? `<ul class="issues">${ma.summary.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
       ${avoidRows ? `<table class="table mechanics"><thead><tr><th>Ability</th><th class="num">Hits</th><th class="num">Damage</th><th>Who</th></tr></thead><tbody>${avoidRows}</tbody></table>`
         : '<p class="muted">None of the tracked abilities for this boss appear in the log.</p>'}
-      <p class="hint">A hand-picked list of avoidable abilities per boss, matched by name. Tank hits from frontal abilities aren't counted.</p>
+      <p class="hint">A hand-picked list of avoidable abilities per boss, matched by name. Hits are times caught: pulses within 3 seconds count once. Tank hits from frontal abilities aren't counted.</p>
     </section>
     ${intRows ? `<section class="card"><h2>Interrupts</h2>
       <table class="table mechanics"><thead><tr><th>Enemy cast</th><th class="num">Interrupted</th><th class="num">Went off</th><th>Interrupted by</th></tr></thead><tbody>${intRows}</tbody></table>
