@@ -370,6 +370,32 @@ const listed = summarizeGuild([{ ...greports[0], zone: { id: 9, name: 'MSV' } }]
 check('progress: uses the site boss list in order', listed.bosses.map((b) => b.name).join() === 'Stone Guard,Feng,Elegon' && listed.total === 3, JSON.stringify(listed.bosses.map((b) => b.name)));
 check('progress: unpulled boss not killed, raid not cleared', !listed.bosses[2].killed && listed.bosses[2].pulls === 0 && listed.killed === 2 && !listed.cleared);
 
+// Attendance counts from each player's first raid, so late joiners aren't marked down for raids before their time.
+const late = summarizeAttendance([
+  { code: 'n3', startTime: 3, players: [{ name: 'Vet', presence: 1 }, { name: 'New', presence: 1 }] },
+  { code: 'n1', startTime: 1, players: [{ name: 'Vet', presence: 1 }] },
+  { code: 'n2', startTime: 2, players: [{ name: 'Vet', presence: 0 }, { name: 'New', presence: 1 }] },
+]);
+const lrow = (n) => late.rows.find((x) => x.name === n);
+check('attendance: span from first raid', lrow('New').span === 2 && lrow('New').pct === 1 && lrow('Vet').span === 3 && Math.abs(lrow('Vet').pct - 2 / 3) < 1e-9,
+  JSON.stringify(late.rows));
+
+// Item names from Wowhead tooltip data (fetch stubbed), written as text with the slot name as fallback.
+const { fillItemNames } = await import('../js/items.js');
+const realFetch = window.fetch;
+window.fetch = async (url) => (String(url).includes('/item/111')
+  ? new Response(JSON.stringify({ name: '<b>Blade</b> of Tests', quality: 4 }), { status: 200 })
+  : new Response('', { status: 404 }));
+const box = document.createElement('div');
+box.innerHTML = '<a data-item-id="111">Main hand</a><a data-item-id="222">Off hand</a>';
+document.body.appendChild(box);
+await fillItemNames(box);
+box.remove();
+window.fetch = realFetch;
+const [named, unnamed] = box.querySelectorAll('a');
+check('items: name filled in as text', named.textContent === '<b>Blade</b> of Tests' && !named.querySelector('b') && named.classList.contains('named'));
+check('items: fallback kept when lookup fails', unnamed.textContent === 'Off hand' && !unnamed.classList.contains('named'));
+
 const g1 = parseGuildLink('https://classic.warcraftlogs.com/guild/id/123456');
 check('guild link: by id', g1?.host === 'classic.warcraftlogs.com' && g1.guild.id === 123456, JSON.stringify(g1));
 const g2 = parseGuildLink('https://classic.warcraftlogs.com/guild/us/mirage-raceway/Fable%20Hub');

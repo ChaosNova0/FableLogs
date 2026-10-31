@@ -208,12 +208,12 @@ export function buildRoster(attendance, roster) {
   for (const m of roster?.members || []) {
     byName.set(m.name, {
       name: m.name, className: roster.classNames.get(m.classID) || '', rank: m.guildRank ?? null, level: m.level ?? null,
-      member: true, present: 0, benched: 0, pct: 0, lastRaid: null, status: 'idle',
+      member: true, present: 0, benched: 0, pct: 0, span: 0, lastRaid: null, status: 'idle',
     });
   }
   for (const p of att.rows) {
     const row = byName.get(p.name) || { name: p.name, className: p.type, rank: null, level: null, member: !roster, status: 'idle' };
-    Object.assign(row, { className: row.className || p.type, present: p.present, benched: p.benched, pct: p.pct });
+    Object.assign(row, { className: row.className || p.type, present: p.present, benched: p.benched, pct: p.pct, span: p.span });
     byName.set(p.name, row);
   }
   for (const n of nights) {
@@ -274,21 +274,27 @@ export function buildRaidTeam(roster, sightings) {
 /**
  * @param attendance  guild.attendance data: [{ code, startTime, players: [{ name, type, presence }] }]
  *                    presence 1 = in the raid, 2 = benched; anything else counts as absent.
+ * Attendance is counted from each player's first raid (`span` raids), so over a long history someone who
+ * joined recently isn't marked down for raids before their time.
  */
 export function summarizeAttendance(attendance) {
-  const nights = attendance || [];
+  const nights = [...(attendance || [])].sort((a, b) => (a.startTime ?? 0) - (b.startTime ?? 0));
   const players = new Map();
-  for (const night of nights) {
+  nights.forEach((night, i) => {
     for (const p of night.players || []) {
-      if (!players.has(p.name)) players.set(p.name, { name: p.name, type: p.type, present: 0, benched: 0 });
+      if (!players.has(p.name)) players.set(p.name, { name: p.name, type: p.type, present: 0, benched: 0, first: null });
       const row = players.get(p.name);
       if (p.presence === 1) row.present++;
       else if (p.presence === 2) row.benched++;
+      if ((p.presence === 1 || p.presence === 2) && row.first == null) row.first = i;
     }
-  }
+  });
   const total = nights.length;
   const rows = [...players.values()]
-    .map((p) => ({ ...p, pct: total ? (p.present + p.benched) / total : 0 }))
+    .map(({ first, ...p }) => {
+      const span = first == null ? 0 : total - first;
+      return { ...p, span, pct: span ? (p.present + p.benched) / span : 0 };
+    })
     .sort((a, b) => b.pct - a.pct || b.present - a.present || a.name.localeCompare(b.name));
   return { total, rows };
 }

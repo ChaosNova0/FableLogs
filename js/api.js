@@ -181,14 +181,28 @@ export async function fetchGuild(host, ref) {
   return guild;
 }
 
-// The guild's latest reports with every boss pull in them, newest first.
-export async function fetchGuildReports(host, guildId, limit) {
-  const { data } = await gql(host, `query ($gid: Int!, $limit: Int) { reportData {
-    reports(guildID: $gid, limit: $limit) { data {
-      code title startTime endTime zone { id name }
-      fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size }
-    } } } }`, { gid: guildId, limit }, { cacheKey: `${guildCachePrefix(guildId)}:reports:${limit}:${hourBucket()}` });
-  return data?.reportData?.reports?.data || [];
+// Guild history is fetched a page at a time; the cap keeps a very old guild from eating the hourly API budget.
+const GUILD_PAGE = 25;
+export const GUILD_MAX = 400;
+
+// All of the guild's reports (up to GUILD_MAX), newest first, with every boss pull in them.
+// Returns { reports, capped } where capped means older reports exist beyond the cap.
+export async function fetchGuildReports(host, guildId) {
+  const reports = [];
+  let capped = false;
+  for (let page = 1; ; page++) {
+    const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { reportData {
+      reports(guildID: $gid, limit: $limit, page: $page) { data {
+        code title startTime endTime zone { id name }
+        fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size }
+      } has_more_pages } } }`, { gid: guildId, limit: GUILD_PAGE, page },
+    { cacheKey: `${guildCachePrefix(guildId)}:reports:p${page}:${hourBucket()}` });
+    const list = data?.reportData?.reports;
+    reports.push(...(list?.data || []));
+    if (!list?.has_more_pages) break;
+    if (reports.length >= GUILD_MAX) { capped = true; break; }
+  }
+  return { reports, capped };
 }
 
 // Per raid, straight from the site: difficulty names (the numbers differ between Warcraft Logs sites and the
@@ -280,12 +294,12 @@ export async function fetchGuildMembers(host, guildId) {
 // Warcraft Logs caps attendance at 25 raids per request, so larger windows are fetched a page at a time.
 const ATTENDANCE_PAGE = 25;
 
-// Attendance for the guild's recent raids. Returns null rather than failing the page; if a later page fails,
-// returns what it already has.
-export async function fetchGuildAttendance(host, guildId, limit) {
+// Attendance for all of the guild's raids (up to GUILD_MAX). Returns null rather than failing the page; if a
+// later page fails, returns what it already has.
+export async function fetchGuildAttendance(host, guildId) {
   const all = [];
   try {
-    for (let page = 1; all.length < limit && page <= Math.ceil(limit / ATTENDANCE_PAGE); page++) {
+    for (let page = 1; all.length < GUILD_MAX; page++) {
       const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { guildData { guild(id: $gid) {
         attendance(limit: $limit, page: $page) { data { code startTime zone { name } players { name type presence } } has_more_pages }
       } } }`, { gid: guildId, limit: ATTENDANCE_PAGE, page },
@@ -299,7 +313,7 @@ export async function fetchGuildAttendance(host, guildId, limit) {
     if (err instanceof AuthError) throw err;
     if (!all.length) return null;
   }
-  return all.length ? all.slice(0, limit) : null;
+  return all.length ? all.slice(0, GUILD_MAX) : null;
 }
 
 // Which raid each boss pull was in, for logs that cover more than one raid. Kept out of fetchReport so

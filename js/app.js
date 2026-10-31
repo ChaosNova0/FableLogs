@@ -4,7 +4,7 @@ import { getClientId, setClientId, getToken, login, logout, handleRedirect, redi
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
-  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
+  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, GUILD_MAX, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES, ENCHANT_SLOTS } from './prep.js';
@@ -16,6 +16,7 @@ import {
   fmtTime, fmtDuration, fmtNum, fmtPct,
 } from './analysis.js';
 import { classColor } from './mop.js';
+import { fillItemNames } from './items.js';
 import { roleOf } from './cooldowns.js';
 
 const $ = (sel) => document.querySelector(sel);
@@ -363,16 +364,26 @@ function rateCell(p, d) {
   return `<td class="${cls}" title="${d}">${Math.round(p * 100)}%</td>`;
 }
 
-function gearIcon(g) {
+// Wowhead link attributes for an equipped item, so tooltips show its item level, enchant and gems.
+function itemLinkAttrs(g) {
   const extra = new URLSearchParams();
   if (g.itemLevel) extra.set('ilvl', g.itemLevel);
   if (g.permanentEnchant) extra.set('ench', g.permanentEnchant);
   const gems = (g.gems || []).map((x) => x.id).filter(Boolean);
   if (gems.length) extra.set('gems', gems.join(':'));
+  return `href="https://www.wowhead.com/${CONFIG.wowheadFlavor}/item=${Number(g.id)}" data-wowhead="${esc(extra.toString())}" target="_blank" rel="noopener"`;
+}
+
+function gearIcon(g) {
   const icon = g.icon ? `<img alt="" loading="lazy" src="https://assets.rpglogs.com/img/warcraft/abilities/${encodeURIComponent(g.icon)}" data-optional>` : '';
-  return `<a class="gear-item q-${QUALITY[g.quality] || 'common'}" href="https://www.wowhead.com/${CONFIG.wowheadFlavor}/item=${Number(g.id)}"
-    data-wowhead="${esc(extra.toString())}" target="_blank" rel="noopener" title="${esc(SLOT_NAMES[g.slot] || '')}">
+  return `<a class="gear-item q-${QUALITY[g.quality] || 'common'}" ${itemLinkAttrs(g)} title="${esc(SLOT_NAMES[g.slot] || '')}">
     ${icon}${g.itemLevel ? `<span class="gear-ilvl">${Number(g.itemLevel)}</span>` : ''}</a>`;
+}
+
+// The combat log has item ids but not names: fillItemNames() swaps this text for the item's name from Wowhead
+// once the page is up. The slot name is the fallback if Wowhead can't be reached.
+function itemNameLink(g) {
+  return `<a class="item-name qt-${QUALITY[g.quality] || 'common'}" ${itemLinkAttrs(g)} data-item-id="${Number(g.id)}">${esc(SLOT_NAMES[g.slot] || 'Item')}</a>`;
 }
 
 function prepCard(prep, lk) {
@@ -619,7 +630,7 @@ function playerGearHtml(prepRow) {
       ? (g.permanentEnchant ? '<span class="yes">Enchanted</span>' : '<span class="no">No enchant</span>') : '';
     return `<li class="gear-row">
       ${gearIcon(g)}
-      <span class="gear-slot">${esc(SLOT_NAMES[slot])}</span>
+      <span class="gear-slot">${itemNameLink(g)}</span>
       <span class="gear-meta">${g.itemLevel ? `<b>${Number(g.itemLevel)}</b>` : ''}${gems ? ` · ${gems} gem${gems === 1 ? '' : 's'}` : ''}</span>
       <span class="gear-enchant">${enchant}</span>
     </li>`;
@@ -790,7 +801,7 @@ async function renderPlayer(r) {
 
 const GUILD_LIMITS = [10, 25, 50];
 
-function guildHeader(r, guild, limit) {
+function guildHeader(r, guild) {
   const where = [guild.server?.name, guild.server?.region?.slug?.toUpperCase(), guild.faction?.name].filter(Boolean).map(esc).join(' · ');
   return `<section class="report-head">
     <div class="report-title">
@@ -798,9 +809,6 @@ function guildHeader(r, guild, limit) {
       <p class="muted">${where}</p>
     </div>
     <div class="head-actions">
-      <label class="select-label">Last
-        <select id="guild-limit">${GUILD_LIMITS.map((n) => `<option value="${n}"${n === limit ? ' selected' : ''}>${n} reports</option>`).join('')}</select>
-      </label>
       <a class="button secondary" href="https://${esc(r.host)}/guild/id/${Number(guild.id)}" target="_blank" rel="noopener">Warcraft Logs ↗</a>
       <button id="refresh" class="secondary" title="Fetch the latest reports from Warcraft Logs">Refresh</button>
     </div>
@@ -830,9 +838,14 @@ function progressionHtml(r, gs) {
   </details>`).join('');
 }
 
-function nightsHtml(r, gs) {
-  const rows = [...gs.nights].reverse();
-  return `<section class="card"><h2>Raid nights</h2>
+// The report-count menu only trims this list; everything else on the guild page uses all the guild's reports.
+function nightsHtml(r, gs, limit) {
+  const rows = [...gs.nights].reverse().slice(0, limit);
+  return `<section class="card"><div class="card-head"><h2>Raid nights</h2>
+      <label class="select-label">Show the last
+        <select id="guild-limit">${GUILD_LIMITS.map((n) => `<option value="${n}"${n === limit ? ' selected' : ''}>${n}</option>`).join('')}</select>
+        of ${gs.nights.length}
+      </label></div>
     <table class="table"><thead><tr><th>Date</th><th>Report</th><th>Raid</th><th class="num">Kills</th><th class="num">Wipes</th><th class="num">Boss time</th><th>First kills</th></tr></thead><tbody>
     ${rows.map((n) => `<tr>
       <td class="muted">${esc(new Date(n.startTime).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
@@ -945,7 +958,7 @@ function rosterRow(p, total, hasMembers) {
     <td class="muted">${esc(p.className || '')}</td>
     <td class="muted">${p.rank == null ? '' : p.rank === 0 ? 'Guild Master' : `Rank ${Number(p.rank)}`}</td>
     <td>${total ? `<span class="meter"><span class="meter-fill ${p.pct >= 0.9 ? 'good' : p.pct >= 0.6 ? 'ok' : 'low'}" style="width:${(p.pct * 100).toFixed(0)}%"></span></span>
-      <span class="meter-val">${raided}/${total}</span>` : ''}</td>
+      <span class="meter-val">${raided}/${p.span}</span>` : ''}</td>
     <td class="muted">${p.lastRaid ? esc(new Date(p.lastRaid).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) : ''}</td>
     <td><span class="badge ${cls}">${label}</span></td>
   </tr>`;
@@ -973,8 +986,8 @@ function rosterHtml(roster) {
     ${active.length ? `<table class="table roster">${head}<tbody>${active.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table>` : ''}
     ${idle.length ? `<details class="idle-members"><summary>${idle.length} member${idle.length === 1 ? '' : 's'} not in these raids</summary>
       <table class="table roster">${head}<tbody>${idle.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table></details>` : ''}
-    <p class="hint">Raids are the guild's last ${roster.total} logged raids, from Warcraft Logs' attendance tracking. Benched counts as attended.
-      "Lapsed" means they raided earlier in that window but not in the last 3.</p>
+    <p class="hint">From Warcraft Logs' attendance tracking across the guild's ${roster.total} logged raids, counted from each player's first raid. Benched counts as attended.
+      "Lapsed" means they raided before but not in the last 3.</p>
   </section>`;
 }
 
@@ -987,9 +1000,9 @@ async function renderGuild(r) {
   const limit = GUILD_LIMITS.includes(saved) ? saved : 25;
 
   setLoading(`Loading ${guild.name}'s reports…`);
-  const [reports, attendance, members] = await Promise.all([
-    fetchGuildReports(r.host, guild.id, limit),
-    fetchGuildAttendance(r.host, guild.id, limit),
+  const [{ reports, capped }, attendance, members] = await Promise.all([
+    fetchGuildReports(r.host, guild.id),
+    fetchGuildAttendance(r.host, guild.id),
     fetchGuildMembers(r.host, guild.id),
   ]);
   remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
@@ -1004,18 +1017,19 @@ async function renderGuild(r) {
   const team = buildRaidTeam(roster, sightings);
 
   view.innerHTML = `
-    ${guildHeader(r, guild, limit)}
+    ${guildHeader(r, guild)}
+    ${capped ? `<p class="hint">Showing the guild's latest ${GUILD_MAX} reports. Older ones are left out to keep the page quick.</p>` : ''}
     ${reports.length ? tabbed('fl.tab.guild', [
     { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>
       ${raidTimelineHtml(gs.progress)}${raidTeamHtml(team, roster)}
       ${progressionHtml(r, gs)}` },
-    { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs) },
+    { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs, limit) },
     { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}
     ${rawBlock('guild', guild)}${rawBlock('reports', reports)}${rawBlock('attendance', attendance)}${rawBlock('members', members?.members.slice(0, 20))}`;
 
   bindTabs();
-  $('#guild-limit').addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });
+  $('#guild-limit')?.addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });
   $('#refresh').addEventListener('click', async () => { await clearReportCache(guildCachePrefix(guild.id)); render(); });
 }
 
@@ -1035,6 +1049,7 @@ async function render() {
     else await renderReport(r);
     if (seq === renderSeq) window.scrollTo(0, 0);
     window.$WowheadPower?.refreshLinks?.();
+    if (seq === renderSeq) fillItemNames(view).catch(() => {});
   } catch (err) {
     if (seq === renderSeq) showError(err);
     console.error(err);

@@ -13,7 +13,7 @@ A static HTML5 site: paste a Warcraft Logs report link and get a plain-language 
 - **Guilds:** paste a guild link (`/guild/id/123` or `/guild/us/server/Name`) for a raid progress gallery (boss
   portraits, crossed out in red once killed), the raid team by role and spec, progression per raid (first kills,
   wipes to kill, fastest kills), raid-night trends, and a roster (members, attendance, raiding/lapsed status, class
-  make-up) across the last 10, 25 or 50 reports.
+  make-up) across the guild's logged history (up to 400 reports; the Raid nights list can show the last 10, 25 or 50).
 - **Per player:** active time, major cooldowns used vs. possible, overhealing, parse percentile, cast counts,
   and a ranked list of tips. Click any player on a pull page.
 
@@ -60,6 +60,7 @@ published; `tests/` is left out because the preview page writes a fake login tok
 | `js/mop.js` | MoP potion names, flask and food detection, class colours |
 | `js/cooldowns.js` | Major cooldowns per class and spec, and role detection |
 | `js/guild.js` | Guild synopsis: progression, raid-night trends, roster and attendance |
+| `js/items.js` | Item names from Wowhead tooltip data, cached and filled in after render |
 | `js/performance.js` | Per-player breakdown: active time, cooldown usage, overheal, tips |
 | `js/specs/` | Spec-specific modules (rotation, uptimes), keyed `Class-Spec` |
 | `js/app.js` | Routing and rendering |

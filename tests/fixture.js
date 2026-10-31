@@ -224,7 +224,11 @@ function respond(query, variables) {
     const data = ATTENDANCE.slice((page - 1) * variables.limit, page * variables.limit);
     return { data: { guildData: { guild: { attendance: { data, has_more_pages: page * variables.limit < ATTENDANCE.length } } } } };
   }
-  if (query.includes('reports(guildID')) return { data: { reportData: { reports: { data: GUILD_REPORTS.slice(0, variables.limit) } } } };
+  if (query.includes('reports(guildID')) {
+    const page = variables.page || 1;
+    const data = GUILD_REPORTS.slice((page - 1) * variables.limit, page * variables.limit);
+    return { data: { reportData: { reports: { data, has_more_pages: page * variables.limit < GUILD_REPORTS.length } } } };
+  }
   if (query.includes('guildData')) return { data: { guildData: { guild: GUILD } } };
   if (query.includes('masterData')) return { data: { ...rate, reportData: { report: REPORT } } };
   if (query.includes('gameZone')) return wrap({ fights: FIGHTS.map((x) => ({ id: x.id, gameZone: ZONE_OF[x.encounterID] })) });
@@ -262,9 +266,23 @@ function respond(query, variables) {
   return { errors: [{ message: `preview fixture has no answer for: ${query.slice(0, 80)}` }] };
 }
 
+const ITEM_NAMES = {
+  0: 'Helm of the Stonebound Guard', 1: "Amulet of Seven Curses", 2: "Spaulders of the Emperor's Rage", 4: 'Chestguard of Eternal Vigilance',
+  5: 'Girdle of Endless Spite', 6: 'Leggings of Imprisoned Will', 7: 'Sabatons of the Superior Being', 8: 'Bracers of Six Oxen',
+  9: 'Gauntlets of Undesired Gifts', 10: 'Ring of the Shado-Pan Assault', 11: 'Circuit of the Frail Soul', 12: 'Bottle of Infinite Stars',
+  13: 'Relic of Xuen', 14: 'Cloak of Overwhelming Corruption', 15: "Starshatter", 16: "Fan of Fiery Winds",
+};
+
 export function installFixture() {
   try { localStorage.setItem('fl.token', JSON.stringify({ access: 'preview', expires: null })); } catch { /* ignore */ }
   window.fetch = async (url, init = {}) => {
+    // Wowhead tooltip data for item names. Fixture item ids encode the slot: 86000 + slot * 10 + player.
+    const item = String(url).match(/nether\.wowhead\.com\/.*\/tooltip\/item\/(\d+)/);
+    if (item) {
+      const slot = Math.floor((Number(item[1]) - 86000) / 10);
+      const name = ITEM_NAMES[slot] || `Item ${item[1]}`;
+      return new Response(JSON.stringify({ name, quality: 4 }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }
     if (!String(url).includes('/api/v2/')) return new Response('', { status: 404 });
     const { query, variables } = JSON.parse(init.body);
     let body;

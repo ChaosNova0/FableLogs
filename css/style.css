@@ -309,6 +309,16 @@ input[type="text"] {
 .q-epic { border-color: #a335ee; }
 .q-legendary { border-color: #ff8000; }
 .q-heirloom, .q-artifact { border-color: #e6cc80; }
+/* Item names in their quality colour; light mode darkens them like class colours so green and white stay readable. */
+.item-name { font-weight: 600; color: color-mix(in srgb, var(--q, var(--text)) var(--cls-mix), #000); }
+.item-name:hover { text-decoration: underline; }
+.qt-poor { --q: #9d9d9d; }
+.qt-common { --q: var(--text); }
+.qt-uncommon { --q: #1eff00; }
+.qt-rare { --q: #0070dd; }
+.qt-epic { --q: #a335ee; }
+.qt-legendary { --q: #ff8000; }
+.qt-heirloom, .qt-artifact { --q: #e6cc80; }
 
 /* One player's gear in two columns, like the character sheet. */
 .gear-sheet { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 1.5rem; margin-top: .5rem; }
