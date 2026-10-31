@@ -191,24 +191,67 @@ export async function fetchGuildReports(host, guildId, limit) {
   return data?.reportData?.reports?.data || [];
 }
 
-// Difficulty names per raid, straight from the site, since the numbers differ between Warcraft Logs sites
-// and the game client. Returns Map "zoneId:difficultyId" → name; empty on failure.
-export async function fetchDifficultyNames(host, zoneIds) {
+// Per raid, straight from the site: difficulty names (the numbers differ between Warcraft Logs sites and the
+// game client) and the full boss list, so bosses nobody has pulled yet still show up.
+// Returns { difficultyNames: Map "zoneId:difficultyId" → name, encounters: Map zoneId → [{ id, name }] };
+// both empty on failure.
+export async function fetchZoneInfo(host, zoneIds) {
+  const info = { difficultyNames: new Map(), encounters: new Map() };
   const ids = [...new Set(zoneIds.map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
-  if (!ids.length) return new Map();
+  if (!ids.length) return info;
   try {
-    const fields = ids.map((id) => `z${id}: zone(id: ${id}) { id difficulties { id name } }`).join(' ');
-    const { data } = await gql(host, `{ worldData { ${fields} } }`, {}, { cacheKey: `zones:${host}:${ids.join(',')}` });
-    const names = new Map();
+    const fields = ids.map((id) => `z${id}: zone(id: ${id}) { id difficulties { id name } encounters { id name } }`).join(' ');
+    const { data } = await gql(host, `{ worldData { ${fields} } }`, {}, { cacheKey: `zoneinfo:${host}:${ids.join(',')}` });
     for (const zone of Object.values(data?.worldData || {})) {
-      for (const d of zone?.difficulties || []) names.set(`${zone.id}:${d.id}`, d.name);
+      if (!zone) continue;
+      for (const d of zone.difficulties || []) info.difficultyNames.set(`${zone.id}:${d.id}`, d.name);
+      if (zone.encounters?.length) info.encounters.set(zone.id, zone.encounters);
     }
-    return names;
   } catch (err) {
     if (err instanceof AuthError) throw err;
-    return new Map();
+  }
+  return info;
+}
+
+// Role and spec per player from the guild's latest reports (Warcraft Logs' playerDetails), so the raid team can
+// be shown by role. Returns [{ name, role: 'tank'|'healer'|'dps', className, spec }] per report sighting;
+// empty on failure.
+export async function fetchTeamSpecs(host, reports) {
+  const recent = reports.slice(0, 3);
+  if (!recent.length) return [];
+  try {
+    const fields = recent.map((r, i) => `r${i}: report(code: ${JSON.stringify(String(r.code))}) {
+      playerDetails(startTime: 0, endTime: ${Math.max(0, Number(r.endTime) - Number(r.startTime)) || 1e9}) }`).join(' ');
+    const { data } = await gql(host, `{ reportData { ${fields} } }`, {},
+      { cacheKey: `team:${host}:${recent.map((r) => r.code).join(',')}` });
+    const roles = { tanks: 'tank', healers: 'healer', dps: 'dps' };
+    const out = [];
+    for (const rep of Object.values(data?.reportData || {})) {
+      const raw = rep?.playerDetails;
+      const details = raw?.data?.playerDetails ?? raw?.playerDetails ?? raw ?? {};
+      for (const [key, role] of Object.entries(roles)) {
+        for (const p of details[key] || []) {
+          const iconSpec = typeof p.icon === 'string' && p.icon.includes('-') ? p.icon.split('-')[1] : null;
+          out.push({ name: p.name, role, className: p.type, spec: p.specs?.[0]?.spec ?? iconSpec });
+        }
+      }
+    }
+    return out;
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return [];
   }
 }
+
+// Spec icon ("Mage-Frost"), or the class icon when the spec isn't known.
+export const specIcon = (className, spec) => {
+  const cls = String(className || '').replace(/\s+/g, '');
+  const sp = String(spec || '').replace(/\s+/g, '');
+  return `https://assets.rpglogs.com/img/warcraft/icons/${encodeURIComponent(sp ? `${cls}-${sp}` : cls)}.jpg`;
+};
+
+export const bossImage = (encounterId) => `https://assets.rpglogs.com/img/warcraft/bosses/${Number(encounterId)}-icon.jpg`;
+export const zoneImage = (zoneId) => `https://assets.rpglogs.com/img/warcraft/zones/zone-${Number(zoneId)}.png`;
 
 // The guild's member list plus the site's class names. Returns null when the site won't share members
 // (e.g. unclaimed guilds), so the roster can fall back to who was seen in raids.
@@ -234,17 +277,29 @@ export async function fetchGuildMembers(host, guildId) {
   }
 }
 
-// Attendance for the guild's recent raids. Returns null rather than failing the page.
+// Warcraft Logs caps attendance at 25 raids per request, so larger windows are fetched a page at a time.
+const ATTENDANCE_PAGE = 25;
+
+// Attendance for the guild's recent raids. Returns null rather than failing the page; if a later page fails,
+// returns what it already has.
 export async function fetchGuildAttendance(host, guildId, limit) {
+  const all = [];
   try {
-    const { data } = await gql(host, `query ($gid: Int!, $limit: Int) { guildData { guild(id: $gid) {
-      attendance(limit: $limit) { data { code startTime zone { name } players { name type presence } } }
-    } } }`, { gid: guildId, limit }, { cacheKey: `${guildCachePrefix(guildId)}:attendance:${limit}:${hourBucket()}` });
-    return data?.guildData?.guild?.attendance?.data ?? null;
+    for (let page = 1; all.length < limit && page <= Math.ceil(limit / ATTENDANCE_PAGE); page++) {
+      const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { guildData { guild(id: $gid) {
+        attendance(limit: $limit, page: $page) { data { code startTime zone { name } players { name type presence } } has_more_pages }
+      } } }`, { gid: guildId, limit: ATTENDANCE_PAGE, page },
+      { cacheKey: `${guildCachePrefix(guildId)}:attendance:p${page}:${hourBucket()}` });
+      const list = data?.guildData?.guild?.attendance;
+      if (!list) break;
+      all.push(...(list.data || []));
+      if (!list.has_more_pages) break;
+    }
   } catch (err) {
     if (err instanceof AuthError) throw err;
-    return null;
+    if (!all.length) return null;
   }
+  return all.length ? all.slice(0, limit) : null;
 }
 
 // Which raid each boss pull was in, for logs that cover more than one raid. Kept out of fetchReport so

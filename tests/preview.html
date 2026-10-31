@@ -51,6 +51,8 @@
     installFixture();
     const tab = new URLSearchParams(location.search).get("tab");
     if (tab) for (const k of ["fl.tab.report", "fl.tab.fight", "fl.tab.guild"]) localStorage.setItem(k, JSON.stringify(tab));
+    const limit = new URLSearchParams(location.search).get("limit");
+    if (limit) localStorage.setItem("fl.guildLimit", limit);
     await import("../js/app.js");
   </script>
 </body>

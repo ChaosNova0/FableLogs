@@ -327,6 +327,30 @@ check('roster: raiding sorted first', ros.rows[0].status === 'raiding' && ros.ro
 const noMembers = buildRoster(rosterAtt, null);
 check('roster: no member list falls back to raiders', !noMembers.hasMembers && noMembers.rows.every((x) => x.member) && noMembers.counts.outsiders === 0);
 
+// Raid team: raiders grouped by the role they played most.
+const { buildRaidTeam } = await import('../js/guild.js');
+const team = buildRaidTeam(ros, [
+  { name: 'Ann', role: 'healer', className: 'Mage', spec: 'Frost' },
+  { name: 'Ann', role: 'dps', className: 'Mage', spec: 'Frost' },
+  { name: 'Ann', role: 'dps', className: 'Mage', spec: 'Fire' },
+  { name: 'Ann', role: 'dps', className: 'Mage', spec: 'Fire' },
+  { name: 'Bob', role: 'tank', className: 'Mage', spec: 'Frost' },
+]);
+check('team: most-played role and spec', team.dps.length === 1 && team.dps[0].name === 'Ann' && team.dps[0].spec === 'Fire', JSON.stringify(team.dps));
+check('team: only current raiders (lapsed Bob left out)', !team.tank.length);
+check('team: unseen raiders go under unknown role', team.unknown.map((p) => p.name).join() === 'Pug' && team.unknown[0].className === 'Rogue', JSON.stringify(team.unknown));
+const { specIcon } = await import('../js/api.js');
+check('spec icon url', specIcon('Death Knight', 'Blood').endsWith('/icons/DeathKnight-Blood.jpg') && specIcon('Hunter', 'Beast Mastery').endsWith('/icons/Hunter-BeastMastery.jpg') && specIcon('Mage', null).endsWith('/icons/Mage.jpg'));
+
+// Raid progress: full boss list from the site, merged across difficulties.
+const prog = summarizeGuild(greports, { zoneEncounters: new Map([[undefined, []]]) }).progress;
+check('progress: falls back to bosses seen', prog[0].total === 3 && prog[0].killed === 2 && !prog[0].cleared, JSON.stringify(prog.map((p) => [p.total, p.killed])));
+const listed = summarizeGuild([{ ...greports[0], zone: { id: 9, name: 'MSV' } }], {
+  zoneEncounters: new Map([[9, [{ id: 1, name: 'Stone Guard' }, { id: 2, name: 'Feng' }, { id: 5, name: 'Elegon' }]]]),
+}).progress[0];
+check('progress: uses the site boss list in order', listed.bosses.map((b) => b.name).join() === 'Stone Guard,Feng,Elegon' && listed.total === 3, JSON.stringify(listed.bosses.map((b) => b.name)));
+check('progress: unpulled boss not killed, raid not cleared', !listed.bosses[2].killed && listed.bosses[2].pulls === 0 && listed.killed === 2 && !listed.cleared);
+
 const g1 = parseGuildLink('https://classic.warcraftlogs.com/guild/id/123456');
 check('guild link: by id', g1?.host === 'classic.warcraftlogs.com' && g1.guild.id === 123456, JSON.stringify(g1));
 const g2 = parseGuildLink('https://classic.warcraftlogs.com/guild/us/mirage-raceway/Fable%20Hub');

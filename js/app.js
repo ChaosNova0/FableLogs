@@ -4,12 +4,12 @@ import { getClientId, setClientId, getToken, login, logout, handleRedirect, redi
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
-  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchDifficultyNames, guildCachePrefix,
+  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
-import { summarizeGuild, buildRoster } from './guild.js';
+import { summarizeGuild, buildRoster, buildRaidTeam } from './guild.js';
 import { analyzePlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
@@ -719,6 +719,83 @@ function nightsHtml(r, gs) {
     </tbody></table></section>`;
 }
 
+// Painted-over red X for killed bosses. Defined once and reused by every tile; the turbulence filter roughens
+// the edges so it reads as a brush stroke rather than vector lines.
+document.body.insertAdjacentHTML('beforeend', `<svg width="0" height="0" style="position:absolute" aria-hidden="true" focusable="false">
+  <defs>
+    <filter id="paint-rough" x="-15%" y="-15%" width="130%" height="130%">
+      <feTurbulence type="fractalNoise" baseFrequency="0.55" numOctaves="3" seed="11" result="noise"/>
+      <feDisplacementMap in="SourceGraphic" in2="noise" scale="7" xChannelSelector="R" yChannelSelector="G"/>
+    </filter>
+    <linearGradient id="paint-red" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#d11a22"/><stop offset=".5" stop-color="#a3101a"/><stop offset="1" stop-color="#6a0910"/>
+    </linearGradient>
+    <symbol id="blood-x" viewBox="0 0 100 100">
+      <g filter="url(#paint-rough)" fill="url(#paint-red)">
+        <!-- Two thick brush strokes, heavier where the brush was pressed and tapering where it lifted. -->
+        <path d="M5 13C13 8 22 14 31 22C43 32 55 43 67 55C77 65 87 75 96 85C99 89 96 96 90 94C80 89 70 79 60 71C48 61 36 51 24 41C16 34 8 29 3 23C0 19 1 15 5 13Z"/>
+        <path d="M95 5C99 8 99 14 94 18C84 28 74 39 63 50C52 61 41 72 29 84C22 91 14 98 8 96C3 94 3 89 7 85C18 74 30 62 42 50C54 38 66 26 78 14C84 8 90 2 95 5Z" opacity=".95"/>
+        <!-- Drips running down from where the strokes are heaviest. -->
+        <path d="M46 56C49 64 48 72 50 80C51 86 49 90 47 90S43 86 44 80C45 72 44 64 46 56Z"/>
+        <path d="M24 42C26 48 25 53 26 58C26 61 24 62 23 60C22 55 22 48 24 42Z"/>
+        <path d="M70 60C72 65 71 70 72 74C72 77 70 77 69 75C68 71 68 65 70 60Z"/>
+        <circle cx="47" cy="94" r="2.6"/>
+        <!-- Splatter flicked off the brush. -->
+        <circle cx="86" cy="22" r="2.2"/><circle cx="12" cy="86" r="1.8"/><circle cx="80" cy="96" r="1.4"/>
+        <circle cx="6" cy="40" r="1.3"/><circle cx="97" cy="58" r="1.5"/><circle cx="60" cy="8" r="1.2"/>
+      </g>
+    </symbol>
+  </defs>
+</svg>`);
+
+function raidGalleryHtml(progress) {
+  if (!progress.length) return '';
+  const tile = (b) => `<figure class="boss-tile${b.killed ? ' killed' : ''}">
+    <div class="boss-portrait">
+      <img src="${bossImage(b.id)}" alt="" loading="lazy" data-optional>
+      ${b.killed ? '<svg class="blood-x" viewBox="0 0 100 100" aria-hidden="true"><use href="#blood-x"/></svg>' : ''}
+    </div>
+    <figcaption>
+      <span class="boss-name">${esc(b.name)}</span>
+      <span class="boss-note">${b.killed
+        ? `${esc(new Date(b.firstKill.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))}${b.kills > 1 ? ` · ×${b.kills}` : ''}`
+        : b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : b.pulls ? `${b.pulls} pulls` : 'Not attempted'}</span>
+    </figcaption>
+  </figure>`;
+  return `<section class="card raid-gallery"><h2>Raid progress</h2>
+    ${progress.map((raid) => `<div class="raid-progress">
+      <header>
+        ${raid.zoneId != null ? `<img class="zone-img" src="${zoneImage(raid.zoneId)}" alt="" loading="lazy" data-optional>` : ''}
+        <div class="raid-progress-title">
+          <h3>${esc(raid.name)}</h3>
+          <div class="raid-progress-bar"><span style="width:${raid.total ? ((raid.killed / raid.total) * 100).toFixed(0) : 0}%"></span></div>
+        </div>
+        ${raid.cleared ? '<span class="badge cleared">Cleared</span>' : `<span class="raid-count">${raid.killed}/${raid.total}</span>`}
+      </header>
+      <div class="boss-grid">${raid.bosses.map(tile).join('')}</div>
+    </div>`).join('')}
+  </section>`;
+}
+
+const TEAM_ROLES = [['tank', 'Tanks'], ['healer', 'Healers'], ['dps', 'DPS'], ['unknown', 'Role unknown']];
+
+function raidTeamHtml(team, roster) {
+  const size = TEAM_ROLES.reduce((n, [role]) => n + team[role].length, 0);
+  if (!size) return '';
+  const member = (p) => `<li class="team-member" style="--cls:${classColor(p.className)}" title="${esc([p.spec, p.className].filter(Boolean).join(' '))}">
+    <img class="spec-icon" src="${specIcon(p.className, p.spec)}" alt="" loading="lazy" data-optional>
+    <span class="player">${esc(p.name)}</span>
+    <span class="team-att">${roster.total ? `${Math.round(p.pct * 100)}%` : ''}</span>
+  </li>`;
+  return `<section class="card raid-team"><h2>Raid team <span class="muted">${size}</span></h2>
+    <p class="hint">Everyone in at least one of the last 3 raids, with the spec they played most in the latest reports. The % is attendance.</p>
+    ${TEAM_ROLES.filter(([role]) => team[role].length).map(([role, label]) => `<div class="team-role">
+      <h3>${label} <span class="muted">${team[role].length}</span></h3>
+      <ul class="team-list">${team[role].map(member).join('')}</ul>
+    </div>`).join('')}
+  </section>`;
+}
+
 const ROSTER_STATUS = {
   raiding: ['kill', 'Raiding'],
   lapsed: ['lapsed', 'Lapsed'],
@@ -783,14 +860,21 @@ async function renderGuild(r) {
   ]);
   remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
 
-  const difficultyNames = await fetchDifficultyNames(r.host, reports.map((rep) => rep.zone?.id).filter((id) => id != null));
-  const gs = summarizeGuild(reports, { difficultyNames });
+  // Reports come newest first, so the team specs are read from the latest raids.
+  const [zoneInfo, sightings] = await Promise.all([
+    fetchZoneInfo(r.host, reports.map((rep) => rep.zone?.id).filter((id) => id != null)),
+    fetchTeamSpecs(r.host, reports),
+  ]);
+  const gs = summarizeGuild(reports, { difficultyNames: zoneInfo.difficultyNames, zoneEncounters: zoneInfo.encounters });
   const roster = buildRoster(attendance, members);
+  const team = buildRaidTeam(roster, sightings);
 
   view.innerHTML = `
     ${guildHeader(r, guild, limit)}
     ${reports.length ? tabbed('fl.tab.guild', [
-    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>${progressionHtml(r, gs)}` },
+    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>
+      <div class="overview-grid">${raidGalleryHtml(gs.progress)}${raidTeamHtml(team, roster)}</div>
+      ${progressionHtml(r, gs)}` },
     { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs) },
     { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}

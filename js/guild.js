@@ -7,9 +7,10 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 /**
  * @param reports  [{ code, title, startTime, endTime, zone: { id, name }, fights: [{ id, encounterID, name, kill,
  *                   bossPercentage, startTime, endTime, difficulty, size }] }] — fight times are relative to the report.
- * @param opts.difficultyNames  Map "zoneId:difficultyId" → name, from fetchDifficultyNames().
+ * @param opts.difficultyNames  Map "zoneId:difficultyId" → name, from fetchZoneInfo().
+ * @param opts.zoneEncounters   Map zoneId → [{ id, name }], every boss in each raid, from fetchZoneInfo().
  */
-export function summarizeGuild(reports, { difficultyNames = new Map() } = {}) {
+export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncounters = new Map() } = {}) {
   const sorted = [...reports].sort((a, b) => a.startTime - b.startTime);
 
   const nights = sorted.map((r) => {
@@ -96,29 +97,67 @@ export function summarizeGuild(reports, { difficultyNames = new Map() } = {}) {
   const labelOf = new Map(bossList.map((b) => [b.key, b.label]));
   for (const n of nights) n.newKills = n.newKills.map((key) => labelOf.get(key));
 
-  // A report has one zone even when the night covered two raids, so a boss goes in the raid where that
-  // encounter was first seen, and later variants (e.g. its heroic) follow it there.
+  // A report has one zone even when the night covered two raids. When the site's boss lists are known, a boss
+  // goes in the raid that lists it; otherwise in the raid where it was first seen, and its other variants follow.
+  const zoneNames = new Map(sorted.filter((r) => r.zone?.id != null).map((r) => [r.zone.id, r.zone.name]));
+  const listedIn = new Map();
+  for (const [zoneId, list] of zoneEncounters) for (const e of list) listedIn.set(e.id, zoneId);
   const homeZone = new Map();
   for (const b of [...bossList].sort((a, c) => a.firstSeen - c.firstSeen)) {
-    if (!homeZone.has(b.encounterID)) homeZone.set(b.encounterID, b.zone);
-    b.zone = homeZone.get(b.encounterID);
+    if (!homeZone.has(b.encounterID)) {
+      const listed = listedIn.get(b.encounterID);
+      homeZone.set(b.encounterID, listed != null && zoneNames.has(listed)
+        ? { zone: zoneNames.get(listed), zoneId: listed } : { zone: b.zone, zoneId: b.zoneId });
+    }
+    Object.assign(b, homeZone.get(b.encounterID));
   }
   const raidMap = new Map();
   for (const b of [...bossList].sort((a, c) => a.firstSeen - c.firstSeen)) {
-    if (!raidMap.has(b.zone)) raidMap.set(b.zone, { name: b.zone, bosses: [] });
+    if (!raidMap.has(b.zone)) raidMap.set(b.zone, { name: b.zone, zoneId: b.zoneId, bosses: [] });
     raidMap.get(b.zone).bosses.push(b);
   }
   const raids = [...raidMap.values()].map((r) => ({ ...r, killed: r.bosses.filter((b) => b.kills.length).length }));
 
-  return { nights, bosses: bossList, raids, takeaways: guildTakeaways(nights, bossList) };
+  const progress = raidProgress(raids, zoneEncounters);
+  return { nights, bosses: bossList, raids, progress, takeaways: guildTakeaways(nights, bossList, progress) };
 }
 
-function guildTakeaways(nights, bosses) {
+/**
+ * One entry per raid with every boss once (all difficulties and sizes merged), in the raid's own order when
+ * the site's boss list is known: { name, zoneId, killed, total, cleared, bosses: [{ id, name, killed, kills,
+ * firstKill, bestWipe, pulls }] }.
+ */
+function raidProgress(raids, zoneEncounters) {
+  return raids.map((raid) => {
+    const byEncounter = new Map();
+    for (const b of raid.bosses) {
+      const e = byEncounter.get(b.encounterID) || { id: b.encounterID, name: b.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null };
+      e.kills += b.kills.length;
+      e.pulls += b.pulls;
+      if (b.firstKill && (!e.firstKill || b.firstKill.at < e.firstKill.at)) e.firstKill = b.firstKill;
+      if (b.bestWipe && (!e.bestWipe || b.bestWipe.pct < e.bestWipe.pct)) e.bestWipe = b.bestWipe;
+      byEncounter.set(b.encounterID, e);
+    }
+    const listed = zoneEncounters.get(raid.zoneId);
+    const bosses = (listed?.length ? listed : [...byEncounter.values()])
+      .map((e) => byEncounter.get(e.id) || { id: e.id, name: e.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null })
+      .map((e) => ({ ...e, killed: e.kills > 0 }));
+    const killed = bosses.filter((b) => b.killed).length;
+    return { name: raid.name, zoneId: raid.zoneId, bosses, killed, total: bosses.length, cleared: bosses.length > 0 && killed === bosses.length };
+  });
+}
+
+function guildTakeaways(nights, bosses, progress) {
   const out = [];
   if (!nights.length) return out;
   const killed = bosses.filter((b) => b.kills.length);
   const bossTime = nights.reduce((t, n) => t + n.bossTime, 0);
-  out.push(`${plural(nights.length, 'raid night')} since ${fmtDate(nights[0].startTime)}: ${killed.length} of ${plural(bosses.length, 'boss', 'bosses')} killed, ${fmtDuration(bossTime)} in boss fights.`);
+  // Count each boss once across difficulties, against every boss in the raids when the site listed them.
+  const totalBosses = progress.reduce((n, r) => n + r.total, 0);
+  const killedBosses = progress.reduce((n, r) => n + r.killed, 0);
+  const cleared = progress.filter((r) => r.cleared).map((r) => r.name);
+  out.push(`${plural(nights.length, 'raid night')} since ${fmtDate(nights[0].startTime)}: ${killedBosses} of ${plural(totalBosses, 'boss', 'bosses')} killed, ${fmtDuration(bossTime)} in boss fights.`);
+  if (cleared.length) out.push(`Cleared: ${cleared.join(', ')}.`);
 
   const latest = nights[nights.length - 1];
   if (latest.newKills.length) out.push(`First kills on the latest night (${fmtDate(latest.startTime)}): ${latest.newKills.join(', ')}.`);
@@ -206,6 +245,30 @@ export function buildRoster(attendance, roster) {
     },
     composition: [...composition.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
   };
+}
+
+/**
+ * The current raid team grouped by role: everyone 'raiding' in the roster, with the role and spec they played
+ * most often in the latest reports. Players never seen in those reports go under `unknown`.
+ * @param roster     buildRoster() result
+ * @param sightings  fetchTeamSpecs() result: [{ name, role, className, spec }]
+ */
+export function buildRaidTeam(roster, sightings) {
+  const seen = new Map();
+  for (const s of sightings) {
+    if (!seen.has(s.name)) seen.set(s.name, new Map());
+    const key = `${s.role}|${s.spec || ''}`;
+    const tally = seen.get(s.name);
+    tally.set(key, { ...s, n: (tally.get(key)?.n || 0) + 1 });
+  }
+  const team = { tank: [], healer: [], dps: [], unknown: [] };
+  for (const p of roster.rows.filter((r) => r.status === 'raiding')) {
+    const best = [...(seen.get(p.name)?.values() || [])].sort((a, b) => b.n - a.n)[0];
+    const member = { name: p.name, className: best?.className || p.className, spec: best?.spec || null, pct: p.pct };
+    team[best ? best.role : 'unknown'].push(member);
+  }
+  for (const list of Object.values(team)) list.sort((a, b) => (a.className || '').localeCompare(b.className || '') || a.name.localeCompare(b.name));
+  return team;
 }
 
 /**

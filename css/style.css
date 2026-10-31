@@ -343,6 +343,53 @@ select {
 .idle-members { margin-top: .9rem; }
 .idle-members > summary { margin-bottom: .5rem; }
 
+/* Raid progress gallery: killed bosses are greyed out and painted over with a red X. */
+.raid-progress + .raid-progress { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
+.raid-progress header { display: flex; align-items: center; gap: .9rem; margin-bottom: .9rem; }
+.zone-img { width: 48px; height: 48px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); flex: 0 0 auto; }
+.raid-progress-title { flex: 1; min-width: 0; }
+.raid-progress-title h3 { margin: 0 0 .35rem; }
+.raid-progress-bar { height: 6px; background: var(--surface-2); border-radius: var(--radius-sm); overflow: hidden; max-width: 360px; }
+.raid-progress-bar span { display: block; height: 100%; background: var(--accent); }
+.raid-count { font-weight: 700; font-variant-numeric: tabular-nums; color: var(--muted); }
+.badge.cleared { background: color-mix(in srgb, var(--accent) 20%, transparent); color: var(--accent); text-transform: uppercase; letter-spacing: .06em; }
+
+.boss-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: .9rem .6rem; }
+.boss-tile { margin: 0; display: flex; flex-direction: column; align-items: center; text-align: center; gap: .4rem; min-width: 0; }
+.boss-portrait {
+  position: relative; width: 64px; height: 64px; border-radius: var(--radius-sm); overflow: visible;
+  background: var(--surface-2); border: 2px solid var(--accent); box-shadow: 0 0 0 1px var(--border);
+}
+.boss-portrait img { width: 100%; height: 100%; display: block; object-fit: cover; border-radius: 1px; }
+.boss-tile.killed .boss-portrait { border-color: var(--border); }
+.boss-tile.killed .boss-portrait img { filter: grayscale(1) brightness(.55) contrast(.9); }
+.blood-x {
+  position: absolute; inset: -12px; width: calc(100% + 24px); height: calc(100% + 24px); pointer-events: none;
+  filter: drop-shadow(0 1px 1px rgba(0, 0, 0, .45));
+}
+.boss-tile figcaption { display: flex; flex-direction: column; gap: .1rem; min-width: 0; max-width: 100%; }
+.boss-name { font-size: .82rem; font-weight: 600; line-height: 1.25; overflow-wrap: anywhere; }
+.boss-tile.killed .boss-name { color: var(--muted); }
+.boss-note { font-size: .74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.boss-tile:not(.killed) .boss-note { color: var(--accent); }
+
+/* Guild overview: raid progress beside the raid team, stacking on narrow screens. */
+.overview-grid { display: grid; grid-template-columns: minmax(0, 2fr) minmax(260px, 1fr); gap: 1rem; align-items: start; margin-bottom: 1rem; }
+.overview-grid > .card { margin-bottom: 0; }
+@media (max-width: 900px) { .overview-grid { grid-template-columns: minmax(0, 1fr); } }
+
+.raid-team h2 .muted, .team-role h3 .muted { font-weight: 500; font-size: .85em; }
+.team-role + .team-role { margin-top: .9rem; }
+.team-role h3 { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: 0 0 .4rem; }
+.team-list { list-style: none; margin: 0; padding: 0; display: grid; gap: .3rem; }
+.team-member {
+  display: flex; align-items: center; gap: .55rem; padding: .25rem .5rem .25rem .25rem; min-width: 0;
+  background: var(--surface-2); border-left: 3px solid var(--cls); border-radius: var(--radius-sm);
+}
+.spec-icon { width: 22px; height: 22px; border-radius: var(--radius-sm); flex: 0 0 auto; }
+.team-member .player { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.team-att { font-size: .78rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
 /* ---------- kudos ---------- */
 
 .kudos { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 220px), 1fr)); gap: .6rem; }

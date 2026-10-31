@@ -170,6 +170,17 @@ const ATTENDANCE = GUILD_REPORTS.map((r, n) => ({
   // n = 0 is the newest raid. Rimeheart stopped coming three raids ago, so shows as lapsed.
   players: PLAYERS.map(([id, name, cls]) => ({ name, type: cls, presence: (id === 9 && n % 3 === 0) ? 0 : (id === 5 && n % 4 === 1) ? 2 : (id === 10 && n < 3) ? 0 : 1 })),
 }));
+// Thirty older raids, so the 50-report window needs more than one 25-raid attendance page.
+for (let n = 0; n < 30; n++) {
+  const startTime = GUILD_REPORTS[GUILD_REPORTS.length - 1].startTime - (n + 1) * 3.5 * 86_400_000;
+  ATTENDANCE.push({ code: `OldRaid${String(n).padStart(2, '0')}xxxxxxx`, startTime, zone: MSV,
+    players: PLAYERS.map(([id, name, cls]) => ({ name, type: cls, presence: id === 6 && n % 2 ? 0 : 1 })) });
+}
+// Every boss in each raid, as worldData.zone.encounters returns them.
+const ZONE_ENCOUNTERS = {
+  1008: [[1395, 'The Stone Guard'], [1390, 'Feng the Accursed'], [1434, "Gara'jal the Spiritbinder"], [1436, 'The Spirit Kings'], [1500, 'Elegon'], [1407, 'Will of the Emperor']],
+  1009: [[1507, "Imperial Vizier Zor'lok"], [1504, "Blade Lord Ta'yak"], [1463, 'Garalon'], [1498, "Wind Lord Mel'jarak"], [1499, "Amber-Shaper Un'sok"], [1501, "Grand Empress Shek'zeer"]],
+};
 // Warcraft Logs class ids are alphabetical. Hexxa raids but isn't in the guild; three alts never raid.
 const CLASS_IDS = { DeathKnight: 1, Druid: 2, Hunter: 3, Mage: 4, Monk: 5, Paladin: 6, Priest: 7, Rogue: 8, Shaman: 9, Warlock: 10, Warrior: 11 };
 const CLASS_LIST = Object.entries(CLASS_IDS).map(([name, id]) => ({ id, name: name === 'DeathKnight' ? 'Death Knight' : name }));
@@ -186,13 +197,33 @@ function respond(query, variables) {
   const fight = FIGHTS.find((x) => x.id === fid);
   const wrap = (report) => ({ data: { reportData: { report } } });
   if (query.includes('worldData')) {
-    const zones = [...query.matchAll(/z(\d+): zone/g)].map((m) => [`z${m[1]}`, { id: Number(m[1]), difficulties: [{ id: 3, name: 'Normal' }, { id: 4, name: 'Heroic' }] }]);
+    const zones = [...query.matchAll(/z(\d+): zone/g)].map((m) => [`z${m[1]}`, {
+      id: Number(m[1]), difficulties: [{ id: 3, name: 'Normal' }, { id: 4, name: 'Heroic' }],
+      encounters: (ZONE_ENCOUNTERS[m[1]] || []).map(([id, name]) => ({ id, name })),
+    }]);
     return { data: { worldData: Object.fromEntries(zones) } };
+  }
+  if (query.includes('playerDetails')) {
+    // Shaped like Warcraft Logs' playerDetails JSON: players grouped by role, "Class-Spec" icons.
+    const byRole = { tanks: [], healers: [], dps: [] };
+    for (const [id, name, cls, spec] of PLAYERS) {
+      const role = ROLE[spec] === 'tank' ? 'tanks' : ROLE[spec] === 'healer' ? 'healers' : 'dps';
+      byRole[role].push({ name, id, type: cls, icon: `${cls}-${spec}`, specs: [{ spec, count: 1 }] });
+    }
+    const reps = {};
+    for (const m of query.matchAll(/(r\d+): report/g)) reps[m[1]] = { playerDetails: { data: { playerDetails: byRole } } };
+    return { data: { reportData: reps } };
   }
   if (query.includes('members(')) {
     return { data: { gameData: { classes: CLASS_LIST }, guildData: { guild: { members: { data: MEMBERS, has_more_pages: false } } } } };
   }
-  if (query.includes('attendance(')) return { data: { guildData: { guild: { attendance: { data: ATTENDANCE.slice(0, variables.limit) } } } } };
+  if (query.includes('attendance(')) {
+    // Like the real API: more than 25 per request is refused.
+    if (variables.limit > 25) return { errors: [{ message: 'limit must be 25 or less' }] };
+    const page = variables.page || 1;
+    const data = ATTENDANCE.slice((page - 1) * variables.limit, page * variables.limit);
+    return { data: { guildData: { guild: { attendance: { data, has_more_pages: page * variables.limit < ATTENDANCE.length } } } } };
+  }
   if (query.includes('reports(guildID')) return { data: { reportData: { reports: { data: GUILD_REPORTS.slice(0, variables.limit) } } } };
   if (query.includes('guildData')) return { data: { guildData: { guild: GUILD } } };
   if (query.includes('masterData')) return { data: { ...rate, reportData: { report: REPORT } } };
