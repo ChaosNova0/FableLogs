@@ -196,10 +196,17 @@ function respond(query, variables) {
   const fid = variables.f?.[0] ?? fightsIn(query)?.[0];
   const fight = FIGHTS.find((x) => x.id === fid);
   const wrap = (report) => ({ data: { reportData: { report } } });
+  if (/r\d+: report\(code:/.test(query) && query.includes('fights(') && !query.includes('playerDetails')) {
+    // Boss pulls for a batch of guild logs, aliased r0, r1, …
+    const reps = {};
+    for (const m of query.matchAll(/(r\d+): report\(code: "([^"]+)"\)/g)) reps[m[1]] = { fights: GUILD_REPORTS.find((x) => x.code === m[2])?.fights || [] };
+    return { data: { ...rate, reportData: reps } };
+  }
   if (query.includes('worldData')) {
     const zones = [...query.matchAll(/z(\d+): zone/g)].map((m) => [`z${m[1]}`, {
       id: Number(m[1]), difficulties: [{ id: 3, name: 'Normal' }, { id: 4, name: 'Heroic' }],
       encounters: (ZONE_ENCOUNTERS[m[1]] || []).map(([id, name]) => ({ id, name })),
+      expansion: { id: 1004, name: 'Mists of Pandaria' },
     }]);
     return { data: { worldData: Object.fromEntries(zones) } };
   }

@@ -29,6 +29,13 @@ export function fmtTime(ms) {
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`;
 }
 
+// "5 Sept", or "5 Sept 2025" when it isn't this year. opts adds fields such as weekday.
+export function fmtDay(ms, opts = {}) {
+  const d = new Date(ms);
+  const year = d.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {};
+  return d.toLocaleDateString(undefined, { day: 'numeric', month: 'short', ...year, ...opts });
+}
+
 // Totals that can run past an hour: "3h 6m" rather than "186:34".
 export function fmtDuration(ms) {
   if (ms < 3_600_000) return fmtTime(ms);

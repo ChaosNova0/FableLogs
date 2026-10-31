@@ -1,7 +1,7 @@
 // Guild synopsis across many reports: progression, raid-night trends and attendance. Pure, like analysis.js.
-import { fmtTime, fmtDuration, fmtPct } from './analysis.js';
+import { fmtTime, fmtDuration, fmtPct, fmtDay } from './analysis.js';
 
-const fmtDate = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+const fmtDate = (ms) => fmtDay(ms);
 const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 /**
@@ -9,9 +9,28 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
  *                   bossPercentage, startTime, endTime, difficulty, size }] }] — fight times are relative to the report.
  * @param opts.difficultyNames  Map "zoneId:difficultyId" → name, from fetchZoneInfo().
  * @param opts.zoneEncounters   Map zoneId → [{ id, name }], every boss in each raid, from fetchZoneInfo().
+ * @param opts.topOnly          Only count each boss at its top size and difficulty: 25-player when the guild has pulled
+ *                              it at 25 (else 10), then the highest difficulty pulled at that size. Raid-night totals
+ *                              still count every pull.
  */
-export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncounters = new Map() } = {}) {
+export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncounters = new Map(), topOnly = false } = {}) {
   const sorted = [...reports].sort((a, b) => a.startTime - b.startTime);
+
+  const top = new Map();
+  for (const r of sorted) {
+    for (const f of r.fights || []) {
+      if (!f.encounterID) continue;
+      const t = top.get(f.encounterID);
+      const size = f.size ?? 0;
+      const diff = f.difficulty ?? 0;
+      if (!t || size > t.size || (size === t.size && diff > t.difficulty)) top.set(f.encounterID, { size, difficulty: diff });
+    }
+  }
+  const counts = (f) => {
+    if (!topOnly) return true;
+    const t = top.get(f.encounterID);
+    return (f.size ?? 0) === t.size && (f.difficulty ?? 0) === t.difficulty;
+  };
 
   const nights = sorted.map((r) => {
     const fights = (r.fights || []).filter((f) => f.encounterID);
@@ -33,20 +52,21 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
   const bosses = new Map();
   sorted.forEach((r, ri) => {
     for (const f of r.fights || []) {
-      if (!f.encounterID) continue;
+      if (!f.encounterID || !counts(f)) continue;
       // 10- and 25-player are separate lockouts in MoP, so size is part of what makes a boss row.
       const key = `${f.encounterID}:${f.difficulty ?? ''}:${f.size ?? ''}`;
       if (!bosses.has(key)) {
         bosses.set(key, {
           key, encounterID: f.encounterID, name: f.name, difficulty: f.difficulty ?? null, size: f.size ?? null,
           zoneId: r.zone?.id ?? null, zone: r.zone?.name || 'Other',
-          firstSeen: r.startTime + f.startTime, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(),
+          firstSeen: r.startTime + f.startTime, lastSeen: 0, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(),
         });
       }
       const b = bosses.get(key);
       b.pulls++;
       b.nights.add(r.code);
       const at = r.startTime + f.startTime;
+      b.lastSeen = Math.max(b.lastSeen, at);
       if (f.kill) {
         if (!b.kills.length) nights[ri].newKills.push(key);
         b.kills.push({ at, duration: f.endTime - f.startTime, code: r.code, fightId: f.id });
@@ -84,10 +104,14 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
       }
       if (parts.length) label = `${b.name} (${parts.join(', ')})`;
     }
+    // "Heroic · 25-player", shown beside the boss when only its top difficulty is counted.
+    const diffName = b.difficulty != null ? difficultyNames.get(`${b.zoneId}:${b.difficulty}`) : null;
+    const variant = [diffName, b.size && !(diffName || '').includes(String(b.size)) ? `${b.size}-player` : null].filter(Boolean).join(' · ');
     return {
       ...b,
       nights: b.nights.size,
       label,
+      variant,
       firstKill: b.kills[0] || null,
       lastKill: b.kills[b.kills.length - 1] || null,
       fastest,
@@ -131,7 +155,7 @@ function raidProgress(raids, zoneEncounters) {
   return raids.map((raid) => {
     const byEncounter = new Map();
     for (const b of raid.bosses) {
-      const e = byEncounter.get(b.encounterID) || { id: b.encounterID, name: b.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null };
+      const e = byEncounter.get(b.encounterID) || { id: b.encounterID, name: b.name, variant: b.variant, kills: 0, pulls: 0, firstKill: null, bestWipe: null };
       e.kills += b.kills.length;
       e.pulls += b.pulls;
       if (b.firstKill && (!e.firstKill || b.firstKill.at < e.firstKill.at)) e.firstKill = b.firstKill;
@@ -143,8 +167,43 @@ function raidProgress(raids, zoneEncounters) {
       .map((e) => byEncounter.get(e.id) || { id: e.id, name: e.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null })
       .map((e) => ({ ...e, killed: e.kills > 0 }));
     const killed = bosses.filter((b) => b.killed).length;
-    return { name: raid.name, zoneId: raid.zoneId, bosses, killed, total: bosses.length, cleared: bosses.length > 0 && killed === bosses.length };
+    const lastSeen = Math.max(0, ...raid.bosses.map((b) => b.lastSeen));
+    return { name: raid.name, zoneId: raid.zoneId, bosses, killed, total: bosses.length, cleared: bosses.length > 0 && killed === bosses.length, lastSeen };
   });
+}
+
+/**
+ * Raid progress grouped by expansion, newest expansion first and the most recently raided raid first within it.
+ * @param expansions  Map zoneId → { id, name } (fetchZoneExpansions); raids without one go under "Raids".
+ */
+export function groupByExpansion(progress, expansions = new Map()) {
+  const groups = new Map();
+  for (const raid of progress) {
+    const exp = expansions.get(raid.zoneId) || { id: -1, name: 'Raids' };
+    if (!groups.has(exp.name)) groups.set(exp.name, { ...exp, raids: [], lastSeen: 0 });
+    const g = groups.get(exp.name);
+    g.raids.push(raid);
+    g.lastSeen = Math.max(g.lastSeen, raid.lastSeen || 0);
+  }
+  for (const g of groups.values()) g.raids.sort((a, b) => (b.lastSeen || 0) - (a.lastSeen || 0));
+  return [...groups.values()].sort((a, b) => b.id - a.id || b.lastSeen - a.lastSeen);
+}
+
+/**
+ * Guild-wide figures for the tiles above the latest-tier summary.
+ * @param list      every report in the guild's history (no fights needed)
+ * @param progress  raid progress across all loaded reports
+ */
+export function guildTotals(list, progress, capped = false) {
+  const times = list.map((r) => r.startTime).filter(Number.isFinite);
+  return {
+    nights: list.length,
+    capped,
+    since: times.length ? Math.min(...times) : null,
+    raids: progress.length,
+    cleared: progress.filter((r) => r.cleared).length,
+    bossesKilled: progress.reduce((n, r) => n + r.killed, 0),
+  };
 }
 
 function guildTakeaways(nights, bosses, progress) {

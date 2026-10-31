@@ -10,7 +10,10 @@ const DEATH_WINDOW_MS = 10_000;
 const WINDOWS_PER_QUERY = 8;
 
 let rateListener = () => {};
+let lastRate = null;
 export function onRateLimit(fn) { rateListener = fn; }
+
+export class RateLimitError extends Error {}
 
 // Accepts a full report URL (any *.warcraftlogs.com site) or a bare report code.
 export function parseReportLink(input) {
@@ -67,12 +70,19 @@ export async function gql(host, query, variables = {}, { cacheKey } = {}) {
     body: JSON.stringify({ query, variables }),
   });
   if (res.status === 401) { logout(); throw new AuthError('Your Warcraft Logs login expired. Connect again.'); }
-  if (res.status === 429) throw new Error('Warcraft Logs rate limit reached. Try again when the hourly budget resets.');
+  if (res.status === 429) {
+    const mins = lastRate ? Math.ceil(lastRate.pointsResetIn / 60) : null;
+    throw new RateLimitError(`Your Warcraft Logs API budget for this hour is used up${mins ? `. It resets in about ${mins} minute${mins === 1 ? '' : 's'}` : ''}. `
+      + 'Anything already loaded is cached, so pages you have seen will still open.');
+  }
   const body = await res.json().catch(() => null);
   if (!res.ok || !body) throw new Error(`Warcraft Logs request failed (${res.status}).`);
   if (body.errors?.length && !body.data) throw new Error(body.errors.map((e) => e.message).join('; '));
 
-  if (body.data?.rateLimitData) rateListener(body.data.rateLimitData);
+  if (body.data?.rateLimitData) {
+    lastRate = body.data.rateLimitData;
+    rateListener(lastRate);
+  }
   const result = { data: body.data, errors: body.errors || [] };
   if (cacheKey && !result.errors.length) await cache.set(cacheKey, result);
   return result;
@@ -181,28 +191,63 @@ export async function fetchGuild(host, ref) {
   return guild;
 }
 
-// Guild history is fetched a page at a time; the cap keeps a very old guild from eating the hourly API budget.
-const GUILD_PAGE = 25;
+// The guild's report list is cheap (no fights), so it covers up to GUILD_MAX reports. Boss pulls are only loaded
+// for the current raids (see fetchReportFights), which is where nearly all the API cost is.
+const LIST_PAGE = 100;
 export const GUILD_MAX = 400;
 
-// All of the guild's reports (up to GUILD_MAX), newest first, with every boss pull in them.
-// Returns { reports, capped } where capped means older reports exist beyond the cap.
-export async function fetchGuildReports(host, guildId) {
+// The guild's reports, newest first, without fights: { reports, capped }.
+export async function fetchGuildReportList(host, guildId) {
   const reports = [];
   let capped = false;
   for (let page = 1; ; page++) {
-    const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { reportData {
-      reports(guildID: $gid, limit: $limit, page: $page) { data {
-        code title startTime endTime zone { id name }
-        fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size }
-      } has_more_pages } } }`, { gid: guildId, limit: GUILD_PAGE, page },
-    { cacheKey: `${guildCachePrefix(guildId)}:reports:p${page}:${hourBucket()}` });
+    const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { ${page === 1 ? RATE_FIELDS : ''} reportData {
+      reports(guildID: $gid, limit: $limit, page: $page) { data { code title startTime endTime zone { id name } } has_more_pages }
+    } }`, { gid: guildId, limit: LIST_PAGE, page },
+    { cacheKey: `${guildCachePrefix(guildId)}:list:p${page}:${hourBucket()}` });
     const list = data?.reportData?.reports;
     reports.push(...(list?.data || []));
     if (!list?.has_more_pages) break;
     if (reports.length >= GUILD_MAX) { capped = true; break; }
   }
-  return { reports, capped };
+  return { reports: reports.slice(0, GUILD_MAX), capped };
+}
+
+const FIGHTS_PER_QUERY = 10;
+const SETTLED_MS = 24 * 3_600_000;
+
+// Boss pulls for the given reports, as Map code → fights. Each report is cached on its own and, once it is a day
+// old (logs don't change after that), kept for good, so a guild page only ever pays for new reports.
+// budgetShare stops fetching once that share of the user's hourly API points is spent (their limit depends on
+// their Warcraft Logs subscription), so history fills in over several visits rather than using it all up.
+// Also stops early, returning what it has, if the budget runs out outright.
+export async function fetchReportFights(host, reports, { budgetShare = 1 } = {}) {
+  const out = new Map();
+  const missing = [];
+  for (const r of reports) {
+    const hit = await cache.get(`fights:${host}:${r.code}`);
+    if (hit !== undefined) out.set(r.code, hit);
+    else missing.push(r);
+  }
+  for (let i = 0; i < missing.length; i += FIGHTS_PER_QUERY) {
+    if (lastRate && lastRate.pointsSpentThisHour >= lastRate.limitPerHour * budgetShare) break;
+    const batch = missing.slice(i, i + FIGHTS_PER_QUERY);
+    const fields = batch.map((r, j) => `r${j}: report(code: ${JSON.stringify(String(r.code))}) {
+      fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size } }`).join(' ');
+    let data;
+    try {
+      ({ data } = await gql(host, `{ ${RATE_FIELDS} reportData { ${fields} } }`));
+    } catch (err) {
+      if (err instanceof RateLimitError && out.size) break;
+      throw err;
+    }
+    for (const [j, r] of batch.entries()) {
+      const fights = data?.reportData?.[`r${j}`]?.fights || [];
+      out.set(r.code, fights);
+      if (Date.now() - (r.endTime || r.startTime) > SETTLED_MS) await cache.set(`fights:${host}:${r.code}`, fights);
+    }
+  }
+  return out;
 }
 
 // Per raid, straight from the site: difficulty names (the numbers differ between Warcraft Logs sites and the
@@ -264,6 +309,21 @@ export const specIcon = (className, spec) => {
   return `https://assets.rpglogs.com/img/warcraft/icons/${encodeURIComponent(sp ? `${cls}-${sp}` : cls)}.jpg`;
 };
 
+// Which expansion each raid belongs to, for grouping raid progress. Kept apart from fetchZoneInfo so that if the
+// field isn't available, difficulties and boss lists still load. Returns Map zoneId → { id, name }; empty on failure.
+export async function fetchZoneExpansions(host, zoneIds) {
+  const ids = [...new Set(zoneIds.map(Number).filter(Number.isFinite))].sort((a, b) => a - b);
+  if (!ids.length) return new Map();
+  try {
+    const fields = ids.map((id) => `z${id}: zone(id: ${id}) { id expansion { id name } }`).join(' ');
+    const { data } = await gql(host, `{ worldData { ${fields} } }`, {}, { cacheKey: `zoneexp:${host}:${ids.join(',')}` });
+    return new Map(Object.values(data?.worldData || {}).filter((z) => z?.expansion?.name).map((z) => [z.id, z.expansion]));
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return new Map();
+  }
+}
+
 export const bossImage = (encounterId) => `https://assets.rpglogs.com/img/warcraft/bosses/${Number(encounterId)}-icon.jpg`;
 export const zoneImage = (zoneId) => `https://assets.rpglogs.com/img/warcraft/zones/zone-${Number(zoneId)}.png`;
 
@@ -294,12 +354,13 @@ export async function fetchGuildMembers(host, guildId) {
 // Warcraft Logs caps attendance at 25 raids per request, so larger windows are fetched a page at a time.
 const ATTENDANCE_PAGE = 25;
 
-// Attendance for all of the guild's raids (up to GUILD_MAX). Returns null rather than failing the page; if a
-// later page fails, returns what it already has.
+// Attendance for the guild's last ATTENDANCE_MAX raids (about a year of raiding). Returns null rather than failing
+// the page; if a later page fails, returns what it already has.
+export const ATTENDANCE_MAX = 100;
 export async function fetchGuildAttendance(host, guildId) {
   const all = [];
   try {
-    for (let page = 1; all.length < GUILD_MAX; page++) {
+    for (let page = 1; all.length < ATTENDANCE_MAX; page++) {
       const { data } = await gql(host, `query ($gid: Int!, $limit: Int, $page: Int) { guildData { guild(id: $gid) {
         attendance(limit: $limit, page: $page) { data { code startTime zone { name } players { name type presence } } has_more_pages }
       } } }`, { gid: guildId, limit: ATTENDANCE_PAGE, page },
@@ -313,7 +374,7 @@ export async function fetchGuildAttendance(host, guildId) {
     if (err instanceof AuthError) throw err;
     if (!all.length) return null;
   }
-  return all.length ? all.slice(0, GUILD_MAX) : null;
+  return all.length ? all.slice(0, ATTENDANCE_MAX) : null;
 }
 
 // Which raid each boss pull was in, for logs that cover more than one raid. Kept out of fetchReport so

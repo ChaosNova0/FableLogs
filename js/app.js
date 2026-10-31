@@ -4,16 +4,16 @@ import { getClientId, setClientId, getToken, login, logout, handleRedirect, redi
 import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
-  fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, GUILD_MAX, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
+  fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   clearReportCache,
 } from './api.js';
 import { prepOverview, SLOT_NAMES, ENCHANT_SLOTS } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
-import { summarizeGuild, buildRoster, buildRaidTeam } from './guild.js';
+import { summarizeGuild, buildRoster, buildRaidTeam, groupByExpansion, guildTotals } from './guild.js';
 import { analyzePlayer, analyzeNightPlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
-  fmtTime, fmtDuration, fmtNum, fmtPct,
+  fmtTime, fmtDuration, fmtNum, fmtPct, fmtDay,
 } from './analysis.js';
 import { classColor } from './mop.js';
 import { fillItemNames } from './items.js';
@@ -800,6 +800,10 @@ async function renderPlayer(r) {
 // ---------- guild view ----------
 
 const GUILD_LIMITS = [10, 25, 50];
+// The latest tier's summary uses at most this many logs; older history only loads while under this share of the
+// user's hourly API points, leaving the rest for report and player pages.
+const LATEST_LOGS = 25;
+const HISTORY_BUDGET = 0.6;
 
 function guildHeader(r, guild) {
   const where = [guild.server?.name, guild.server?.region?.slug?.toUpperCase(), guild.faction?.name].filter(Boolean).map(esc).join(' · ');
@@ -825,10 +829,10 @@ function progressionHtml(r, gs) {
       <th>Boss</th><th>Status</th><th>First kill</th><th class="num">Pulls</th><th class="num">Wipes to kill</th><th class="num">Fastest</th><th class="num">Nights</th>
     </tr></thead><tbody>
     ${raid.bosses.map((b) => `<tr>
-      <td>${esc(b.label)}</td>
+      <td>${esc(b.label)}${b.variant ? ` <span class="muted">${esc(b.variant)}</span>` : ''}</td>
       <td>${b.kills.length ? `<span class="badge kill">Killed${b.kills.length > 1 ? ` ×${b.kills.length}` : ''}</span>`
         : `<span class="badge wipe">${b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : 'No kill'}</span>`}</td>
-      <td>${b.firstKill ? fightLink(b.firstKill, esc(new Date(b.firstKill.at).toLocaleDateString(undefined, { day: 'numeric', month: 'short' }))) : '<span class="muted">–</span>'}</td>
+      <td>${b.firstKill ? fightLink(b.firstKill, esc(fmtDay(b.firstKill.at))) : '<span class="muted">–</span>'}</td>
       <td class="num">${b.pulls}</td>
       <td class="num">${b.firstKill ? b.wipesBeforeKill : `<span class="muted">${b.wipesBeforeKill}+</span>`}</td>
       <td class="num">${b.fastest ? fightLink(b.fastest, fmtTime(b.fastest.duration)) : '<span class="muted">–</span>'}</td>
@@ -838,24 +842,29 @@ function progressionHtml(r, gs) {
   </details>`).join('');
 }
 
-// The report-count menu only trims this list; everything else on the guild page uses all the guild's reports.
-function nightsHtml(r, gs, limit) {
-  const rows = [...gs.nights].reverse().slice(0, limit);
+// The report-count menu only trims this list; everything else on the guild page uses the guild's history.
+// Logs whose boss pulls haven't been loaded yet (older history, budget permitting) show dashes.
+function nightsHtml(r, list, statsByCode, limit) {
+  const rows = list.slice(0, limit);
+  const dash = '<span class="muted">–</span>';
   return `<section class="card"><div class="card-head"><h2>Raid nights</h2>
       <label class="select-label">Show the last
         <select id="guild-limit">${GUILD_LIMITS.map((n) => `<option value="${n}"${n === limit ? ' selected' : ''}>${n}</option>`).join('')}</select>
-        of ${gs.nights.length}
+        of ${list.length}
       </label></div>
     <table class="table"><thead><tr><th>Date</th><th>Report</th><th>Raid</th><th class="num">Kills</th><th class="num">Wipes</th><th class="num">Boss time</th><th>First kills</th></tr></thead><tbody>
-    ${rows.map((n) => `<tr>
-      <td class="muted">${esc(new Date(n.startTime).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' }))}</td>
-      <td><a href="${href({ code: n.code, host: r.host })}">${esc(n.title || n.code)}</a></td>
-      <td class="muted">${esc(n.zone)}</td>
-      <td class="num">${n.kills}</td>
-      <td class="num">${n.wipes}</td>
-      <td class="num">${fmtDuration(n.bossTime)}</td>
-      <td>${n.newKills.length ? `<span class="yes">${esc(n.newKills.join(', '))}</span>` : ''}</td>
-    </tr>`).join('')}
+    ${rows.map((rep) => {
+    const n = statsByCode.get(rep.code);
+    return `<tr>
+      <td class="muted">${esc(fmtDay(rep.startTime, { weekday: 'short' }))}</td>
+      <td><a href="${href({ code: rep.code, host: r.host })}">${esc(rep.title || rep.code)}</a></td>
+      <td class="muted">${esc(rep.zone?.name || '')}</td>
+      <td class="num">${n ? n.kills : dash}</td>
+      <td class="num">${n ? n.wipes : dash}</td>
+      <td class="num">${n ? fmtDuration(n.bossTime) : dash}</td>
+      <td>${n?.newKills.length ? `<span class="yes">${esc(n.newKills.join(', '))}</span>` : ''}</td>
+    </tr>`;
+  }).join('')}
     </tbody></table></section>`;
 }
 
@@ -888,7 +897,7 @@ document.body.insertAdjacentHTML('beforeend', `<svg width="0" height="0" style="
   </defs>
 </svg>`);
 
-const shortDate = (ms) => new Date(ms).toLocaleDateString(undefined, { day: 'numeric', month: 'short' });
+const shortDate = (ms) => fmtDay(ms);
 
 function bossPortrait(b) {
   return `<div class="boss-portrait">
@@ -897,30 +906,46 @@ function bossPortrait(b) {
   </div>`;
 }
 
-// Each raid as a track of its bosses in raid order. The line turns gold between consecutive kills; killed
-// bosses are greyed under the red X with their first kill date, the rest show their best attempt.
-function raidTimelineHtml(progress) {
-  if (!progress.length) return '';
-  return `<section class="card raid-gallery"><h2>Raid progress</h2>
-    ${progress.map((raid) => `<div class="raid-progress">
-      <header>
-        ${raid.zoneId != null ? `<img class="zone-img" src="${zoneImage(raid.zoneId)}" alt="" loading="lazy" data-optional>` : ''}
-        <div class="raid-progress-title">
-          <h3>${esc(raid.name)}</h3>
-          <div class="raid-progress-bar"><span style="width:${raid.total ? ((raid.killed / raid.total) * 100).toFixed(0) : 0}%"></span></div>
-        </div>
-        ${raid.cleared ? '<span class="badge cleared">Cleared</span>' : `<span class="raid-count">${raid.killed}/${raid.total}</span>`}
-      </header>
-      <ol class="boss-track" style="--n:${raid.bosses.length}">
-        ${raid.bosses.map((b, i) => `<li class="boss-tile${b.killed ? ' killed' : ''}${b.killed && raid.bosses[i - 1]?.killed ? ' linked' : ''}">
-          ${bossPortrait(b)}
-          <span class="boss-name">${esc(b.name)}</span>
-          <span class="boss-note">${b.killed
+// Raid progress grouped by expansion, newest first. Each raid is collapsible (the latest tier starts open) and
+// shows its bosses as a track in raid order: the line turns gold between consecutive kills, killed bosses are
+// greyed under the red X with their first kill date, the rest show their best attempt.
+function raidTimelineHtml(groups, openZones) {
+  if (!groups.length) return '';
+  const raidBlock = (raid) => `<details class="raid-progress"${openZones.has(raid.zoneId) ? ' open' : ''}>
+    <summary>
+      ${raid.zoneId != null ? `<img class="zone-img" src="${zoneImage(raid.zoneId)}" alt="" loading="lazy" data-optional>` : ''}
+      <div class="raid-progress-title">
+        <h3>${esc(raid.name)}</h3>
+        <div class="raid-progress-bar"><span style="width:${raid.total ? ((raid.killed / raid.total) * 100).toFixed(0) : 0}%"></span></div>
+      </div>
+      ${raid.cleared ? '<span class="badge cleared">Cleared</span>' : `<span class="raid-count">${raid.killed}/${raid.total}</span>`}
+    </summary>
+    <ol class="boss-track" style="--n:${raid.bosses.length}">
+      ${raid.bosses.map((b, i) => `<li class="boss-tile${b.killed ? ' killed' : ''}${b.killed && raid.bosses[i - 1]?.killed ? ' linked' : ''}"
+          ${b.variant ? `title="${esc(b.variant)}"` : ''}>
+        ${bossPortrait(b)}
+        <span class="boss-name">${esc(b.name)}</span>
+        <span class="boss-note">${b.killed
     ? `${esc(shortDate(b.firstKill.at))}${b.kills > 1 ? ` · ×${b.kills}` : ''}`
     : b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : b.pulls ? `${b.pulls} pulls` : 'Not attempted'}</span>
-        </li>`).join('')}
-      </ol>
+      </li>`).join('')}
+    </ol>
+  </details>`;
+  return `<section class="card raid-gallery"><h2>Raid progress</h2>
+    ${groups.map((g) => `<div class="expansion">
+      ${groups.length > 1 || g.id !== -1 ? `<h3 class="expansion-name">${esc(g.name)}</h3>` : ''}
+      ${g.raids.map(raidBlock).join('')}
     </div>`).join('')}
+  </section>`;
+}
+
+function guildTilesHtml(t) {
+  const tile = (label, value) => `<div class="stat"><span class="stat-val">${value}</span><span class="stat-label">${esc(label)}</span></div>`;
+  return `<section class="stats">
+    ${tile('Raid nights logged', `${t.nights}${t.capped ? '+' : ''}`)}
+    ${t.since ? tile('Logging since', esc(fmtDay(t.since, { year: 'numeric' }))) : ''}
+    ${tile('Raids cleared', `${t.cleared} / ${t.raids}`)}
+    ${tile('Bosses killed', String(t.bossesKilled))}
   </section>`;
 }
 
@@ -959,7 +984,7 @@ function rosterRow(p, total, hasMembers) {
     <td class="muted">${p.rank == null ? '' : p.rank === 0 ? 'Guild Master' : `Rank ${Number(p.rank)}`}</td>
     <td>${total ? `<span class="meter"><span class="meter-fill ${p.pct >= 0.9 ? 'good' : p.pct >= 0.6 ? 'ok' : 'low'}" style="width:${(p.pct * 100).toFixed(0)}%"></span></span>
       <span class="meter-val">${raided}/${p.span}</span>` : ''}</td>
-    <td class="muted">${p.lastRaid ? esc(new Date(p.lastRaid).toLocaleDateString(undefined, { day: 'numeric', month: 'short' })) : ''}</td>
+    <td class="muted">${p.lastRaid ? esc(fmtDay(p.lastRaid)) : ''}</td>
     <td><span class="badge ${cls}">${label}</span></td>
   </tr>`;
 }
@@ -1000,33 +1025,52 @@ async function renderGuild(r) {
   const limit = GUILD_LIMITS.includes(saved) ? saved : 25;
 
   setLoading(`Loading ${guild.name}'s reports…`);
-  const [{ reports, capped }, attendance, members] = await Promise.all([
-    fetchGuildReports(r.host, guild.id),
+  const [{ reports: list, capped }, attendance, members] = await Promise.all([
+    fetchGuildReportList(r.host, guild.id),
     fetchGuildAttendance(r.host, guild.id),
     fetchGuildMembers(r.host, guild.id),
   ]);
   remember({ kind: 'guild', host: r.host, guild: { id: guild.id }, title: guild.name });
 
-  // Reports come newest first, so the team specs are read from the latest raids.
-  const [zoneInfo, sightings] = await Promise.all([
-    fetchZoneInfo(r.host, reports.map((rep) => rep.zone?.id).filter((id) => id != null)),
-    fetchTeamSpecs(r.host, reports),
+  // The latest tier is the raids in the newest few logs; its summary uses at most the newest LATEST_LOGS logs of
+  // those raids, which always load. Older history loads only while the user's hourly API budget allows, and fills
+  // in on later visits because each log's pulls are cached once fetched.
+  setLoading(`Loading ${guild.name}'s boss pulls…`);
+  const tierZones = new Set(list.slice(0, 5).map((rep) => rep.zone?.id).filter((id) => id != null));
+  const latestList = list.slice(0, LATEST_LOGS).filter((rep) => tierZones.has(rep.zone?.id));
+  const latestFights = await fetchReportFights(r.host, latestList);
+  const olderFights = await fetchReportFights(r.host, list.filter((rep) => !latestFights.has(rep.code)), { budgetShare: HISTORY_BUDGET });
+  const fights = new Map([...latestFights, ...olderFights]);
+  const withFights = list.filter((rep) => fights.has(rep.code)).map((rep) => ({ ...rep, fights: fights.get(rep.code) }));
+  const latest = withFights.filter((rep) => latestFights.has(rep.code));
+
+  const zoneIds = list.map((rep) => rep.zone?.id).filter((id) => id != null);
+  const [zoneInfo, expansions, sightings] = await Promise.all([
+    fetchZoneInfo(r.host, zoneIds),
+    fetchZoneExpansions(r.host, zoneIds),
+    fetchTeamSpecs(r.host, latestList),
   ]);
-  const gs = summarizeGuild(reports, { difficultyNames: zoneInfo.difficultyNames, zoneEncounters: zoneInfo.encounters });
+  const opts = { difficultyNames: zoneInfo.difficultyNames, zoneEncounters: zoneInfo.encounters, topOnly: true };
+  const current = summarizeGuild(latest, opts);
+  const history = summarizeGuild(withFights, opts);
   const roster = buildRoster(attendance, members);
   const team = buildRaidTeam(roster, sightings);
+  const unloaded = list.length - withFights.length;
 
   view.innerHTML = `
     ${guildHeader(r, guild)}
-    ${capped ? `<p class="hint">Showing the guild's latest ${GUILD_MAX} reports. Older ones are left out to keep the page quick.</p>` : ''}
-    ${reports.length ? tabbed('fl.tab.guild', [
-    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>Summary</h2><ul>${gs.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>
-      ${raidTimelineHtml(gs.progress)}${raidTeamHtml(team, roster)}
-      ${progressionHtml(r, gs)}` },
-    { id: 'nights', label: 'Raid nights', count: gs.nights.length, html: nightsHtml(r, gs, limit) },
+    ${list.length ? tabbed('fl.tab.guild', [
+    { id: 'overview', label: 'Overview', html: `${guildTilesHtml(guildTotals(list, history.progress, capped))}
+      <section class="card takeaways"><h2>Latest tier</h2><ul>${current.takeaways.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>
+      ${raidTimelineHtml(groupByExpansion(history.progress, expansions), tierZones)}
+      ${unloaded ? `<p class="hint">Boss pulls are loaded for ${withFights.length} of ${list.length} logs. Older raids fill in on later visits as your
+        Warcraft Logs API budget allows (it depends on your Warcraft Logs subscription).</p>` : ''}
+      ${raidTeamHtml(team, roster)}
+      ${progressionHtml(r, current)}` },
+    { id: 'nights', label: 'Raid nights', count: list.length, html: nightsHtml(r, list, new Map(history.nights.map((n) => [n.code, n])), limit) },
     { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}
-    ${rawBlock('guild', guild)}${rawBlock('reports', reports)}${rawBlock('attendance', attendance)}${rawBlock('members', members?.members.slice(0, 20))}`;
+    ${rawBlock('guild', guild)}${rawBlock('reports', list)}${rawBlock('attendance', attendance)}${rawBlock('members', members?.members.slice(0, 20))}`;
 
   bindTabs();
   $('#guild-limit')?.addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });

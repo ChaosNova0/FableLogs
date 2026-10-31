@@ -370,8 +370,17 @@ select {
 .idle-members > summary { margin-bottom: .5rem; }
 
 /* Raid progress gallery: killed bosses are greyed out and painted over with a red X. */
-.raid-progress + .raid-progress { margin-top: 1.25rem; padding-top: 1.25rem; border-top: 1px solid var(--border); }
-.raid-progress header { display: flex; align-items: center; gap: .9rem; margin-bottom: .9rem; }
+/* Each raid is collapsible; raids are grouped under their expansion. */
+.raid-progress + .raid-progress { border-top: 1px solid var(--border); }
+.raid-progress > summary { display: flex; align-items: center; gap: .9rem; padding: .7rem 0; cursor: pointer; list-style: none; }
+.raid-progress > summary::-webkit-details-marker { display: none; }
+.raid-progress > summary::after { content: '▸'; color: var(--muted); transition: transform .15s; }
+.raid-progress[open] > summary::after { transform: rotate(90deg); }
+.raid-progress > summary:hover h3 { color: var(--accent); }
+.raid-progress > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.raid-progress[open] > .boss-track { margin-bottom: .9rem; }
+.expansion + .expansion { margin-top: 1rem; }
+.expansion-name { font-size: .78rem; text-transform: uppercase; letter-spacing: .06em; color: var(--muted); margin: .25rem 0 .1rem; }
 .zone-img { width: 48px; height: 48px; object-fit: cover; border-radius: var(--radius-sm); border: 1px solid var(--border); flex: 0 0 auto; }
 .raid-progress-title { flex: 1; min-width: 0; }
 .raid-progress-title h3 { margin: 0 0 .35rem; }
