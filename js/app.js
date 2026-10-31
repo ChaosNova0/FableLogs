@@ -28,6 +28,10 @@ import { roleOf } from './cooldowns.js';
 const $ = (sel) => document.querySelector(sel);
 const view = $('#view');
 
+// The deploy step stamps every import with ?v=<commit>; showing it in the footer makes a stale cached page easy to spot.
+const build = new URL(import.meta.url).searchParams.get('v');
+if (build && $('#build')) $('#build').textContent = `Version ${build.slice(0, 7)}.`;
+
 // ---------- helpers ----------
 
 const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
