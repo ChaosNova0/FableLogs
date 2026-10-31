@@ -791,8 +791,10 @@ async function renderCompare(r) {
   const intRows = c.interrupts.map((x) => `<tr><td>${spellLink(lk, x.a?.abilityId ?? x.b?.abilityId, x.name)}</td>
     <td class="num">${x.a ? `${x.a.wentOff} went off · ${x.a.interrupted} stopped` : '–'}</td>
     <td class="num">${x.b ? `${x.b.wentOff} went off · ${x.b.interrupted} stopped` : '–'}</td></tr>`).join('');
-  const cdTimes = (list) => (list.length ? list.map((x) => `${fmtTime(x.at)} <span class="muted">${esc(lk.actor(x.pid)?.name || '')}</span>`).join('<br>') : '<span class="no">not used</span>');
-  const cdRows = c.cooldowns.map((x) => `<tr><td>${esc(x.name)}</td><td>${cdTimes(x.a)}</td><td>${cdTimes(x.b)}</td></tr>`).join('');
+  // After the first lust the raid is sated for 10 minutes, so another cast in that time only reaches pets.
+  const satedNote = (name, list, x) => (name === 'Bloodlust' && list[0] !== x && x.at - list[0].at < 600_000 ? ' <span class="muted">(pets only: the raid is sated)</span>' : '');
+  const cdTimes = (name, list) => (list.length ? list.map((x) => `${fmtTime(x.at)} <span class="muted">${esc(lk.actor(x.pid)?.name || '')}</span>${satedNote(name, list, x)}`).join('<br>') : '<span class="no">not used</span>');
+  const cdRows = c.cooldowns.map((x) => `<tr><td>${esc(x.name)}</td><td>${cdTimes(x.name, x.a)}</td><td>${cdTimes(x.name, x.b)}</td></tr>`).join('');
   const mechanicsHtml = `
     ${avoidRows ? `<section class="card"><h2>Avoidable hits</h2><table class="table compare">${headRow('Ability')}<tbody>${avoidRows}</tbody></table></section>` : ''}
     ${intRows ? `<section class="card"><h2>Interrupts</h2><table class="table compare">${headRow('Enemy cast')}<tbody>${intRows}</tbody></table></section>` : ''}
