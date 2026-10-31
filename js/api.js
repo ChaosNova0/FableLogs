@@ -491,10 +491,12 @@ export async function fetchRaidBuffEvents(host, code, fightIDs) {
 // real log, so the compare page shows the raw result for checking.
 export async function fetchFightGraphs(host, code, fight) {
   try {
-    const { data } = await gql(host, `query ($code: String!, $f: [Int]!) { reportData { report(code: $code) {
-      damage: graph(dataType: DamageDone, fightIDs: $f)
-      health: graph(dataType: Resources, hostilityType: Enemies, abilityID: 1000, fightIDs: $f)
-    } } }`, { code, f: [fight.id] }, { cacheKey: `${code}:graphs:${fight.id}` });
+    // Without a time window the graph spans the whole log in coarse steps (47 seconds on a real 3-hour night), with
+    // zeros outside the pull; limited to the pull, the steps are a second or two.
+    const { data } = await gql(host, `query ($code: String!, $f: [Int]!, $s: Float, $e: Float) { reportData { report(code: $code) {
+      damage: graph(dataType: DamageDone, fightIDs: $f, startTime: $s, endTime: $e)
+      health: graph(dataType: Resources, hostilityType: Enemies, abilityID: 1000, fightIDs: $f, startTime: $s, endTime: $e)
+    } } }`, { code, f: [fight.id], s: fight.startTime, e: fight.endTime }, { cacheKey: `${code}:graphs2:${fight.id}` });
     const r = data?.reportData?.report || {};
     return { damage: r.damage ?? null, health: r.health ?? null };
   } catch (err) {

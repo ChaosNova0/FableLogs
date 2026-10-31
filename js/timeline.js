@@ -14,8 +14,10 @@ export function graphSeries(graph) {
   });
 }
 
-// Times can be report-relative (the usual) or already pull-relative; this makes them ms into the pull.
-const intoPull = (fight, t) => (t >= fight.startTime ? t - fight.startTime : t);
+// Graph times are report-relative (pointStart 0 is the start of the log); this makes them ms into the pull and drops
+// points outside it.
+const intoPull = (fight, points) => points.map(([t, v]) => [t - fight.startTime, v])
+  .filter(([t]) => t >= 0 && t <= fight.endTime - fight.startTime);
 
 // Smooths a [t, v] line with a moving average over windowMs, so a 1-second spike doesn't swamp the chart.
 export function smooth(points, windowMs = 10_000) {
@@ -29,22 +31,22 @@ export function smooth(points, windowMs = 10_000) {
 export function raidDps(graph, fight) {
   const total = new Map();
   for (const s of graphSeries(graph)) {
-    if (/^total$/i.test(s.name || '')) return smooth(s.points.map(([t, v]) => [intoPull(fight, t), v]));
+    if (/^total$/i.test(s.name || '')) return smooth(intoPull(fight, s.points));
     for (const [t, v] of s.points) total.set(t, (total.get(t) || 0) + v);
   }
-  return smooth([...total.entries()].sort((a, b) => a[0] - b[0]).map(([t, v]) => [intoPull(fight, t), v]));
+  return smooth(intoPull(fight, [...total.entries()].sort((a, b) => a[0] - b[0])));
 }
 
 // Boss health over the pull, 0-100. Picks the boss's series (type Boss, else the enemy with the most health) and
 // scales it to its highest value, so absolute hit points and percentages both work. A kill ends at 0.
 export function bossHealth(graph, fight) {
-  const all = graphSeries(graph).filter((s) => s.points.length);
+  const all = graphSeries(graph).map((s) => ({ ...s, points: intoPull(fight, s.points) })).filter((s) => s.points.length);
   if (!all.length) return [];
   const peak = (s) => Math.max(...s.points.map(([, v]) => v));
   const bosses = all.filter((s) => /boss/i.test(s.type || ''));
   const pick = (bosses.length ? bosses : all).reduce((best, s) => (peak(s) > peak(best) ? s : best));
   const max = peak(pick) || 1;
-  const pts = pick.points.map(([t, v]) => [intoPull(fight, t), Math.max(0, Math.min(100, (v / max) * 100))]);
+  const pts = pick.points.map(([t, v]) => [t, Math.max(0, Math.min(100, (v / max) * 100))]);
   if (fight.kill && pts.length && pts[pts.length - 1][1] > 0) pts.push([fight.endTime - fight.startTime, 0]);
   return pts;
 }

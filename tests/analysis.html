@@ -635,7 +635,11 @@ const hp = bossHealth({ series: [
   { name: 'Boss', type: 'Boss', pointStart: 10000, pointInterval: 10000, data: [80e6, 40e6, 8e6] },
 ] }, tFight);
 check('timeline: boss health picks the boss, scales to %, kill ends at 0', hp[0][1] === 100 && hp[1][1] === 50 && hp[2][1] === 10 && hp[hp.length - 1][0] === 30000 && hp[hp.length - 1][1] === 0, JSON.stringify(hp));
-check('timeline: missing graphs', raidDps(null, tFight).length === 0 && bossHealth(undefined, tFight).length === 0);
+// As a real log sent it without a time window: pointStart 0 (log start), coarse steps, zeros outside the pull.
+const wholeLog = { data: { series: [{ name: 'Maari', type: 'Shaman', pointStart: 0, pointInterval: 5000, data: [0, 0, 300, 400, 500, 0, 0, 0, 0, 0] }] } };
+const wl = raidDps(wholeLog, tFight);
+check('timeline: points outside the pull dropped', wl.length && wl[0][0] === 0 && wl[wl.length - 1][0] <= 30000 && wl.every(([t]) => t >= 0), JSON.stringify(wl));
+check('timeline: missing graphs',raidDps(null, tFight).length === 0 && bossHealth(undefined, tFight).length === 0);
 const { lineChart } = await import('../js/charts.js');
 const lc = lineChart([{ label: 'Pull 2', points: [[0, 10], [60000, 20]] }, { label: 'Pull 3 <kill>', points: [[0, 15], [90000, 5]] }], { label: 'x', yFmt: String });
 check('line chart: two lines, legend, escaped hover', (lc.match(/class="lc-line/g) || []).length === 2 && lc.includes('lc-key-b') && lc.includes('Pull 3 &lt;kill&gt;') && lc.includes('<title>'));
