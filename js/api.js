@@ -487,18 +487,23 @@ export async function fetchEnemyDebuffs(host, code, fight) {
   }
 }
 
-// One player's buffs and the debuffs they applied to enemies, with uptimes, for the spec checks. Null on failure.
+// One player's buffs (the Buffs table: auras on them, with uptimes) and the debuff events they caused on enemies,
+// for the spec checks. The Debuffs table filtered by sourceID lists debuffs on that actor rather than ones they
+// applied, so their DoTs come from events instead. Returns { buffs, debuffEvents }; null on failure.
 export async function fetchPlayerAuras(host, code, fight, pid) {
   try {
-    const { data } = await gql(host, `query ($code: String!, $f: [Int]!, $p: Int!) { reportData { report(code: $code) {
-      buffs: table(dataType: Buffs, fightIDs: $f, sourceID: $p)
-      debuffs: table(dataType: Debuffs, hostilityType: Enemies, fightIDs: $f, sourceID: $p)
-    } } }`, { code, f: [fight.id], p: pid }, { cacheKey: `${code}:auras:${fight.id}:${pid}` });
+    const [{ data }, debuffEvents] = await Promise.all([
+      gql(host, `query ($code: String!, $f: [Int]!, $p: Int!) { reportData { report(code: $code) {
+        buffs: table(dataType: Buffs, fightIDs: $f, sourceID: $p)
+      } } }`, { code, f: [fight.id], p: pid }, { cacheKey: `${code}:buffs:${fight.id}:${pid}` }),
+      fetchAllEvents(host, code, { dataType: 'Debuffs', hostilityType: 'Enemies', fightIDs: [fight.id], sourceID: pid },
+        `${code}:debuffevents:${fight.id}:${pid}`),
+    ]);
     const r = data?.reportData?.report;
     if (!r) return null;
-    return { buffs: r.buffs?.data ?? r.buffs ?? null, debuffs: r.debuffs?.data ?? r.debuffs ?? null };
+    return { buffs: r.buffs?.data ?? r.buffs ?? null, debuffEvents };
   } catch (err) {
-    if (err instanceof AuthError) throw err;
+    if (err instanceof AuthError || err instanceof RateLimitError) throw err;
     return null;
   }
 }

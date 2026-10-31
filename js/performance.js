@@ -169,7 +169,7 @@ export function analyzeNightPlayer(ctx) {
  * @param ctx.deaths     player death events in the fight
  * @param ctx.prep       this player's consumables row (from consumables()), or null
  * @param ctx.rankings   rankings JSON for the fight, or null
- * @param ctx.auras      { buffs, debuffs } aura tables for this player (fetchPlayerAuras), or null
+ * @param ctx.auras      { buffs, debuffEvents } for this player (fetchPlayerAuras), or null
  * @param ctx.mechanics  analyzeMechanics() result for the fight, or null
  */
 export function analyzePlayer(ctx) {
@@ -259,7 +259,11 @@ export function analyzePlayer(ctx) {
   }
 
   const module = SPEC_MODULES[`${String(className || '').replace(/\s+/g, '')}-${spec}`];
-  const uptimes = module && ctx.auras ? specUptimes(module, ctx.auras, alive) : [];
+  const auras = ctx.auras && {
+    buffs: ctx.auras.buffs,
+    debuffs: ctx.auras.debuffs ?? { auras: debuffAuras(ctx.auras.debuffEvents || [], fight.startTime, fight.startTime + alive, lk) },
+  };
+  const uptimes = module && auras ? specUptimes(module, auras, alive) : [];
   for (const u of uptimes) {
     const p = Math.round(u.uptime * 100);
     if (u.uptime >= u.target) tip('good', `${u.label} was up ${p}% of the time you were alive.`);
@@ -287,9 +291,49 @@ export function analyzePlayer(ctx) {
 const auraList = (table) => table?.auras || table?.data?.auras || [];
 
 /**
+ * Debuffs a player kept on enemies, from their applydebuff/removedebuff events, shaped like aura table entries:
+ * [{ name, guid, totalUptime }]. Uptime is the time at least one enemy had it, between start and end (ms), so
+ * spreading a DoT over several targets doesn't count twice.
+ */
+export function debuffAuras(events, start, end, lk) {
+  const open = new Map();
+  const spans = new Map();
+  const close = (key, id, at) => {
+    const from = open.get(key);
+    open.delete(key);
+    if (from == null) return;
+    const a = Math.max(from, start);
+    const b = Math.min(at, end);
+    if (b > a) (spans.get(id) || spans.set(id, []).get(id)).push([a, b]);
+  };
+  for (const e of [...events].sort((x, y) => x.timestamp - y.timestamp)) {
+    const key = `${e.targetID}:${e.targetInstance || 0}:${e.abilityGameID}`;
+    if (e.type === 'applydebuff' || ((e.type === 'refreshdebuff' || e.type === 'applydebuffstack') && !open.has(key))) {
+      if (!open.has(key)) open.set(key, e.timestamp);
+    } else if (e.type === 'removedebuff') {
+      // A remove with no apply seen means it was already up when the pull started.
+      if (!open.has(key)) open.set(key, start);
+      close(key, e.abilityGameID, e.timestamp);
+    }
+  }
+  for (const key of [...open.keys()]) close(key, Number(key.split(':')[2]), end);
+
+  return [...spans.entries()].map(([id, list]) => {
+    list.sort((x, y) => x[0] - y[0]);
+    let total = 0;
+    let [s, t] = list[0];
+    for (const [a, b] of list.slice(1)) {
+      if (a > t) { total += t - s; [s, t] = [a, b]; } else t = Math.max(t, b);
+    }
+    total += t - s;
+    return { name: lk.abilityName(id), guid: id, totalUptime: total };
+  });
+}
+
+/**
  * Uptime of each spec check, over the time the player was alive. Talent checks the player never had are skipped.
  * @param checks  SPEC_MODULES entry
- * @param auras   { buffs, debuffs } tables from fetchPlayerAuras
+ * @param auras   { buffs, debuffs } aura tables (debuffs from debuffAuras())
  */
 export function specUptimes(checks, auras, alive) {
   const span = Math.max(1, alive);

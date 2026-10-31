@@ -2,9 +2,9 @@
 // Each is a list of uptimes the spec is expected to keep, judged against the time the player was alive:
 //   { kind: 'buff' | 'debuff', names: [...], label?, target, tip, talent? }
 // names: aura names that count (several are combined, e.g. Corruption and Doom); label defaults to the first.
-// kind 'buff' is an aura on the player; 'debuff' is one they apply to enemies (capped at 100% across targets).
+// kind 'buff' is an aura on the player; 'debuff' is one they apply to enemies (time on at least one enemy).
 // talent: only judged when the player had it at all, since we can't see talents.
-// Uptimes come from the player's Buffs and Debuffs tables (fetchPlayerAuras), matched by name.
+// Uptimes come from the player's Buffs table and their debuff events on enemies (fetchPlayerAuras), matched by name.
 
 const buff = (names, target, tip, extra = {}) => ({ kind: 'buff', names: [].concat(names), target, tip, ...extra });
 const debuff = (names, target, tip, extra = {}) => ({ kind: 'debuff', names: [].concat(names), target, tip, ...extra });

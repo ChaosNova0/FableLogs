@@ -306,7 +306,7 @@ async function renderReport(r) {
   const kudos = reportKudos({ report, lk, deaths, totals });
   const prep = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions) : null;
   const info = specInfo(lk, [totals?.damage, totals?.healing]);
-  const nm = mech ? nightMechanics(report.fights || [], mech.damage, lk, (pid) => info(pid).role) : null;
+  const nm = mech ? nightMechanics(report.fights || [], mech.damage, lk, (pid) => info(pid).role, deaths) : null;
   const nightBuffs = prepData ? nightBuffCoverage((report.fights || []).map((f) => {
     const pids = raidPlayers(f, lk);
     return { fight: f, coverage: buffCoverage(pids, prepData.combatants.filter((c) => c.fight === f.id), lk, pids.map((pid) => info(pid).classSpec)) };
@@ -618,7 +618,7 @@ function uptimesHtml(uptimes, lk) {
       <td>${meter(u.uptime, u.target, u.target - 0.15)} <span class="meter-val">${Math.round(u.uptime * 100)}%</span></td>
       <td class="num muted">${Math.round(u.target * 100)}%</td></tr>`).join('')}
     </tbody></table>
-    <p class="hint">Debuffs on several enemies can add up, so uptime is capped at 100%.</p>
+    <p class="hint">A debuff counts as up while it's on at least one enemy.</p>
   </section>`;
 }
 
@@ -644,7 +644,7 @@ async function renderFight(r) {
   const cons = consumables(fight, detail.combatants, detail.potions, lk);
   const kudos = fightKudos({ fight, lk, detail, deaths: fightDeaths, prep: cons, rankings });
   const info = specInfo(lk, [detail.damage, detail.healing]);
-  const ma = mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role) : null;
+  const ma = mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role, fightDeaths) : null;
   const pids = raidPlayers(fight, lk);
   const classSpecs = pids.map((pid) => info(pid).classSpec);
   const buffs = buffCoverage(pids, detail.combatants, lk, classSpecs);
@@ -806,7 +806,7 @@ async function renderNightPlayer(r) {
   const info = specInfo(lk, tableList);
   const myFights = (report.fights || []).filter((f) => (f.friendlyPlayers || []).includes(r.player) && mechanicsFor(f.name));
   const avoidable = mech && myFights.length
-    ? nightMechanics(myFights, mech.damage, lk, (pid) => info(pid).role).players.find((p) => p.pid === r.player) || { hits: 0, pulls: 0 }
+    ? nightMechanics(myFights, mech.damage, lk, (pid) => info(pid).role, deaths).players.find((p) => p.pid === r.player) || { hits: 0, pulls: 0 }
     : null;
   const prepRow = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions).players.find((p) => p.pid === r.player) : null;
   const np = analyzeNightPlayer({
@@ -887,7 +887,7 @@ async function renderPlayer(r) {
   const pa = analyzePlayer({
     fight, pid: r.player, lk, damage: detail.damage, healing: detail.healing,
     casts, deaths: fightDeaths, prep, rankings, auras,
-    mechanics: mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role) : null,
+    mechanics: mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role, fightDeaths) : null,
   });
 
   const pulls = report.fights.filter((f) => f.encounterID === fight.encounterID && (f.friendlyPlayers || []).includes(r.player));

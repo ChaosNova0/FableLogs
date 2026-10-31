@@ -108,6 +108,13 @@ export function trackedNames(bossNames) {
 
 const hitSize = (e) => (e.amount || 0) + (e.absorbed || 0);
 
+// When half the raid had died on this pull, or null if it never did. Matches analyzeFight's cut-off for deaths.
+function collapseTime(fight, deaths, lk) {
+  const mine = deaths.filter((d) => d.fight === fight.id).sort((a, b) => a.timestamp - b.timestamp);
+  const size = (fight.friendlyPlayers || []).filter((id) => lk.isPlayer(id)).length || fight.size || mine.length;
+  return mine[Math.ceil(size / 2) - 1]?.timestamp ?? null;
+}
+
 /**
  * One pull's mechanics: who was hit by avoidable damage and which casts got through.
  * @param fight       fight object
@@ -116,29 +123,35 @@ const hitSize = (e) => (e.amount || 0) + (e.absorbed || 0);
  * @param interrupts  interrupt events for the fight
  * @param lk          lookups
  * @param roleOf      pid → 'tank'|'healer'|'dps'|null
+ * @param deaths      player death events (any fights): on a wipe, hits after half the raid is dead aren't counted,
+ *                    since by then the boss is hitting whoever is left (e.g. breaths on the raid once the tanks die)
  * Returns null when the boss has no mechanics list.
  */
-export function analyzeMechanics(fight, damage, enemyCasts, interrupts, lk, roleOf = () => null) {
+export function analyzeMechanics(fight, damage, enemyCasts, interrupts, lk, roleOf = () => null, deaths = []) {
   const m = mechanicsFor(fight.name);
   if (!m) return null;
   const inFight = (e) => e.timestamp >= fight.startTime && e.timestamp <= fight.endTime && (e.fight == null || e.fight === fight.id);
   const seen = new Set([...lk.abilities.values()].map((a) => a.name));
+  const until = fight.kill ? fight.endTime : collapseTime(fight, deaths, lk) ?? fight.endTime;
 
   const avoid = m.avoid.filter((a) => seen.has(a.name)).map((a) => {
-    const hits = damage.filter((e) => e.type === 'damage' && inFight(e) && lk.abilityName(e.abilityGameID) === a.name
+    const events = damage.filter((e) => e.type === 'damage' && inFight(e) && e.timestamp <= until && lk.abilityName(e.abilityGameID) === a.name
       && lk.isPlayer(e.targetID) && !(a.tanksOk && roleOf(e.targetID) === 'tank'));
+    // A hit is the initial damage; ticks of a DoT it leaves add to the damage but aren't further hits.
     const byPlayer = new Map();
-    for (const e of hits) {
+    for (const e of events) {
       const p = byPlayer.get(e.targetID) || { pid: e.targetID, hits: 0, damage: 0 };
-      p.hits++; p.damage += hitSize(e);
+      if (!e.tick) p.hits++;
+      p.damage += hitSize(e);
       byPlayer.set(e.targetID, p);
     }
+    const players = [...byPlayer.values()].filter((p) => p.hits).sort((x, y) => y.hits - x.hits || y.damage - x.damage);
     return {
       ...a,
-      abilityId: hits[0]?.abilityGameID ?? [...lk.abilities.values()].find((x) => x.name === a.name)?.gameID ?? null,
-      hits: hits.length,
-      damage: hits.reduce((t, e) => t + hitSize(e), 0),
-      players: [...byPlayer.values()].sort((x, y) => y.hits - x.hits || y.damage - x.damage),
+      abilityId: events[0]?.abilityGameID ?? [...lk.abilities.values()].find((x) => x.name === a.name)?.gameID ?? null,
+      hits: players.reduce((n, p) => n + p.hits, 0),
+      damage: players.reduce((n, p) => n + p.damage, 0),
+      players,
     };
   }).sort((x, y) => y.hits - x.hits);
 
@@ -187,11 +200,11 @@ export function analyzeMechanics(fight, damage, enemyCasts, interrupts, lk, role
 }
 
 // Avoidable hits per player across a whole night: Map pid → { hits, damage, pulls }, plus the worst abilities.
-export function nightMechanics(fights, damage, lk, roleOf = () => null) {
+export function nightMechanics(fights, damage, lk, roleOf = () => null, deaths = []) {
   const players = new Map();
   const abilities = new Map();
   for (const f of fights) {
-    const res = analyzeMechanics(f, damage, [], [], lk, roleOf);
+    const res = analyzeMechanics(f, damage, [], [], lk, roleOf, deaths);
     if (!res) continue;
     for (const p of res.players) {
       const t = players.get(p.pid) || { pid: p.pid, hits: 0, damage: 0, pulls: 0 };

@@ -25,6 +25,7 @@ const ABILITIES = [
   [1459, 'Arcane Brilliance', 'spell_holy_magicalsentry.jpg'], [113742, "Swiftblade's Cunning", 'ability_rogue_slicedice.jpg'],
   [116956, 'Grace of Air', 'spell_nature_windfury.jpg'], [114239, 'Nether Tempest', 'spell_mage_nethertempest.jpg'],
   [116257, 'Invocation', 'spell_arcane_arcane03.jpg'], [113746, 'Weakened Armor', 'ability_warrior_sunder.jpg'],
+  [84617, 'Revealing Strike', 'inv_sword_97.jpg'], [5171, 'Slice and Dice', 'ability_rogue_slicedice.jpg'],
   [81326, 'Physical Vulnerability', 'ability_warrior_colossussmash.jpg'], [115798, 'Weakened Blows', 'ability_warrior_thunderclap.jpg'],
 ];
 
@@ -261,8 +262,19 @@ function respond(query, variables) {
     const span = fight.endTime - fight.startTime;
     const up = (name, share) => ({ name, guid: ABILITIES.find((a) => a[1] === name)?.[0] ?? 0, totalUptime: Math.round(span * share), totalUses: 3 });
     const buffs = { 6: [up('Invocation', 0.78)], 7: [up('Slice and Dice', 0.97)] }[variables.p] || [];
-    const debuffs = { 6: [up('Nether Tempest', 0.93)], 7: [up('Revealing Strike', 0.71)] }[variables.p] || [];
-    return wrap({ buffs: { data: { auras: buffs } }, debuffs: { data: { auras: debuffs } } });
+    return wrap({ buffs: { data: { auras: buffs } } });
+  }
+  if (query.includes('dataType: Debuffs') && query.includes('sourceID:')) {
+    // The player's debuffs on the boss, as apply/remove events: Nether Tempest with one gap, Revealing Strike patchy.
+    const f = FIGHTS.find((x) => x.id === fightsIn(query)[0]);
+    const pid = Number(query.match(/sourceID: (\d+)/)[1]);
+    const span = f.endTime - f.startTime;
+    const plan = { 6: [114239, [[0.01, 0.5], [0.57, 1]]], 7: [84617, [[0.05, 0.3], [0.4, 0.6], [0.75, 0.95]]] }[pid];
+    const events = plan ? plan[1].flatMap(([a, b]) => [
+      { timestamp: f.startTime + Math.round(span * a), type: 'applydebuff', sourceID: pid, targetID: boss(f), abilityGameID: plan[0], fight: f.id },
+      ...(b < 1 ? [{ timestamp: f.startTime + Math.round(span * b), type: 'removedebuff', sourceID: pid, targetID: boss(f), abilityGameID: plan[0], fight: f.id }] : []),
+    ]) : [];
+    return wrap({ events: { data: events, nextPageTimestamp: null } });
   }
   if (query.includes('debuffs: table(dataType: Debuffs')) {
     // Raid debuffs on the boss: armor and Weakened Blows kept up, Physical Vulnerability patchy, no spell debuff.

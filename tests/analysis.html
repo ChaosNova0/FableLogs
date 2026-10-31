@@ -463,6 +463,16 @@ const tn = trackedNames(['Thok the Bloodthirsty', 'Garrosh Hellscream', 'Thok th
 check('mechanics: tracked names merged', tn.avoid.includes('Scorching Breath') && tn.avoid.includes('Desecrated') && tn.interrupt.includes('Chain Heal'));
 const night = nightMechanics([thok, { ...thok, id: 8, startTime: 90000, endTime: 120000 }], [dmg(2000, 2, 10, 50), dmg(99000, 2, 10, 50, 8), dmg(100000, 3, 10, 50, 8)], mlk, () => 'dps');
 check('mechanics: night totals', night.players[0].pid === 2 && night.players[0].hits === 2 && night.players[0].pulls === 2 && night.abilities[0].hits === 3, JSON.stringify(night));
+// A breath's DoT ticks add damage but aren't more hits.
+const ticks = analyzeMechanics(thok, [dmg(2000, 2, 10, 100), { ...dmg(3000, 2, 10, 20), tick: true }, { ...dmg(4000, 2, 10, 20), tick: true }, { ...dmg(5000, 3, 10, 20), tick: true }], [], [], mlk, () => 'dps');
+const tb = ticks.avoid.find((a) => a.name === 'Scorching Breath');
+check('mechanics: ticks are damage, not hits', tb.hits === 1 && tb.damage === 140 && tb.players.length === 1, JSON.stringify(tb));
+// On a wipe, hits after half the raid is dead (the boss turning on whoever's left) don't count.
+const wipeFight = { ...thok, kill: false, friendlyPlayers: [1, 2, 3, 4] };
+const wipeDeaths = [{ fight: 7, timestamp: 10000, targetID: 1 }, { fight: 7, timestamp: 20000, targetID: 4 }];
+const lateHits = analyzeMechanics(wipeFight, [dmg(5000, 2, 10, 100), dmg(25000, 2, 10, 100), dmg(26000, 3, 10, 100)], [], [], mlk, () => 'dps', wipeDeaths);
+check('mechanics: hits after the collapse ignored', lateHits.players.length === 1 && lateHits.players[0].hits === 1, JSON.stringify(lateHits.players));
+check('mechanics: kills keep every hit', analyzeMechanics({ ...wipeFight, kill: true }, [dmg(5000, 2, 10, 100), dmg(25000, 2, 10, 100)], [], [], mlk, () => 'dps', wipeDeaths).players[0].hits === 2);
 
 // ---------- raid buffs ----------
 const { buffCoverage, debuffCoverage, nightBuffCoverage } = await import('../js/buffs.js');
@@ -482,7 +492,20 @@ const nbStats = nbc.find((b) => b.key === 'stats');
 check('buffs: night coverage', nbc[0].pulls === 2 && nbStats.full === 0 && nbStats.missing.map((f) => f.id).join() === '3' && nbc.find((b) => b.key === 'ap').full === 2, JSON.stringify(nbStats));
 
 // ---------- spec uptimes ----------
-const { specUptimes } = await import('../js/performance.js');
+const { specUptimes, debuffAuras } = await import('../js/performance.js');
+const dlk = buildLookups({ masterData: { actors: [], abilities: [{ gameID: 589, name: 'Shadow Word: Pain' }, { gameID: 34914, name: 'Vampiric Touch' }] } });
+const dev = (ts, type, target, ab = 589) => ({ timestamp: ts, type, targetID: target, abilityGameID: ab });
+const da = debuffAuras([
+  dev(1000, 'applydebuff', 50), dev(5000, 'removedebuff', 50),   // 1-5s on the boss
+  dev(3000, 'applydebuff', 51), dev(7000, 'removedebuff', 51),   // 3-7s on an add: overlaps, so 1-7s in all
+  dev(9000, 'refreshdebuff', 50),                                // first seen as a refresh: up from 9s to the end
+  dev(4000, 'removedebuff', 52, 34914),                          // up since before the pull: 0-4s
+], 0, 12000, dlk);
+const swp = da.find((a) => a.name === 'Shadow Word: Pain');
+const vt = da.find((a) => a.name === 'Vampiric Touch');
+check('debuff uptime: union across targets', swp.totalUptime === 6000 + 3000 && swp.guid === 589, JSON.stringify(da));
+check('debuff uptime: up before the pull', vt.totalUptime === 4000);
+check('debuff uptime: clipped at death', debuffAuras([dev(1000, 'applydebuff', 50)], 0, 5000, dlk)[0].totalUptime === 4000);
 const { SPEC_MODULES } = await import('../js/specs/index.js');
 const ups = specUptimes(SPEC_MODULES['Warlock-Demonology'], { debuffs: { data: { auras: [{ name: 'Corruption', totalUptime: 40000, guid: 172 }, { name: 'Doom', totalUptime: 45000 }] } } }, 100000);
 check('uptimes: combined names', ups.length === 1 && Math.abs(ups[0].uptime - 0.85) < 1e-9 && ups[0].label === 'Corruption / Doom' && ups[0].abilityId === 172, JSON.stringify(ups));
@@ -498,7 +521,14 @@ const pu = analyzePlayer({
   mechanics: { avoid: [{}], players: [{ pid: 7, hits: 3, abilities: [['Swirl', 2], ['Sha Pool', 1]] }] },
 });
 check('player: uptime tips', pu.tips.some((t) => t.level === 'major' && t.text.startsWith('Revealing Strike was up 60%')) && pu.tips.some((t) => t.level === 'good' && t.text.startsWith('Slice and Dice')), JSON.stringify(pu.tips));
-check('player: avoidable tip', pu.tips.some((t) => t.level === 'major' && t.text.includes('3 avoidable hits (Swirl ×2, Sha Pool)')));
+const pe = analyzePlayer({
+  fight: { id: 1, startTime: 0, endTime: 100000 }, pid: 7,
+  lk: buildLookups({ masterData: { actors: [{ id: 7, name: 'Shank', type: 'Player', subType: 'Rogue' }], abilities: [{ gameID: 84617, name: 'Revealing Strike' }] } }),
+  damage: { entries: [{ id: 7, icon: 'Rogue-Combat', total: 1000, activeTime: 95000 }] }, healing: null, casts: [], deaths: [], prep: null, rankings: null,
+  auras: { buffs: { auras: [] }, debuffEvents: [{ timestamp: 10000, type: 'applydebuff', targetID: 50, abilityGameID: 84617 }, { timestamp: 50000, type: 'removedebuff', targetID: 50, abilityGameID: 84617 }] },
+});
+check('player: debuff uptime from events', Math.abs(pe.uptimes.find((u) => u.label === 'Revealing Strike').uptime - 0.4) < 1e-9, JSON.stringify(pe.uptimes));
+check('player: avoidable tip',pu.tips.some((t) => t.level === 'major' && t.text.includes('3 avoidable hits (Swirl ×2, Sha Pool)')));
 
 // ---------- progress charts ----------
 const { remainingPct } = await import('../js/analysis.js');
