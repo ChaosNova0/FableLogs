@@ -305,7 +305,7 @@ async function renderReport(r) {
     ])
     : [null, null, new Map(), null, []];
   const kudos = reportKudos({ report, lk, deaths, totals });
-  const prep = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions) : null;
+  const prep = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions, buffEvents) : null;
   const info = specInfo(lk, [totals?.damage, totals?.healing]);
   const nm = mech ? nightMechanics(report.fights || [], mech.damage, lk, (pid) => info(pid).role, deaths) : null;
   const nightBuffs = prepData ? nightBuffCoverage((report.fights || []).map((f) => {
@@ -647,7 +647,7 @@ async function renderFight(r) {
   ]);
 
   const fa = analyzeFight(fight, fightDeaths, windows, lk);
-  const cons = consumables(fight, detail.combatants, detail.potions, lk);
+  const cons = consumables(fight, detail.combatants, detail.potions, lk, buffEvents);
   const kudos = fightKudos({ fight, lk, detail, deaths: fightDeaths, prep: cons, rankings });
   const info = specInfo(lk, [detail.damage, detail.healing]);
   const ma = mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role, fightDeaths) : null;
@@ -801,11 +801,12 @@ async function renderNightPlayer(r) {
   const fightIDs = (report.fights || []).map((f) => f.id);
   const kills = (report.fights || []).filter((f) => f.kill && (f.friendlyPlayers || []).includes(r.player));
   const tracked = trackedNames((report.fights || []).map((f) => f.name));
-  const [tables, prepData, rankingList, mech] = await Promise.all([
+  const [tables, prepData, rankingList, mech, buffEvents] = await Promise.all([
     fetchFightTables(r.host, r.code, fightIDs),
     fetchReportPrep(r.host, r.code, fightIDs),
     Promise.all(kills.map((f) => fetchRankings(r.host, r.code, f))),
     tracked.avoid.length ? fetchMechanicEvents(r.host, r.code, fightIDs, { avoid: tracked.avoid }) : null,
+    fetchRaidBuffEvents(r.host, r.code, fightIDs),
   ]);
   const s = summarizeReport(report, deaths, lk);
   const tableList = [...tables.values()].flatMap((t) => [t.damage, t.healing]);
@@ -814,7 +815,7 @@ async function renderNightPlayer(r) {
   const avoidable = mech && myFights.length
     ? nightMechanics(myFights, mech.damage, lk, (pid) => info(pid).role, deaths).players.find((p) => p.pid === r.player) || { hits: 0, pulls: 0 }
     : null;
-  const prepRow = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions).players.find((p) => p.pid === r.player) : null;
+  const prepRow = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions, buffEvents).players.find((p) => p.pid === r.player) : null;
   const np = analyzeNightPlayer({
     report, lk, pid: r.player, deaths,
     firstDeaths: (s.firstDeathCounts.find(([id]) => id === r.player) || [0, 0])[1],
@@ -880,11 +881,12 @@ async function renderPlayer(r) {
 
   setLoading(`Analysing ${actor.name}…`);
   const fightDeaths = deaths.filter((d) => d.fight === fight.id);
-  const [detail, casts, rankings, mech] = await Promise.all([
+  const [detail, casts, rankings, mech, buffEvents] = await Promise.all([
     fetchFightDetail(r.host, r.code, fight),
     fetchPlayerCasts(r.host, r.code, fight, r.player),
     fetchRankings(r.host, r.code, fight),
     mechanicsFor(fight.name) ? fetchMechanicEvents(r.host, r.code, [fight.id], trackedNames([fight.name])) : null,
+    fetchRaidBuffEvents(r.host, r.code, [fight.id]),
   ]);
   const info = specInfo(lk, [detail.damage, detail.healing]);
   // Aura uptimes are only fetched for specs that have checks written.
@@ -892,7 +894,7 @@ async function renderPlayer(r) {
   const auras = checks
     ? await fetchPlayerAuras(r.host, r.code, fight, r.player, checks.filter((c) => c.kind === 'debuff').flatMap((c) => c.names))
     : null;
-  const prep = consumables(fight, detail.combatants, detail.potions, lk).rows.find((x) => x.pid === r.player) || null;
+  const prep = consumables(fight, detail.combatants, detail.potions, lk, buffEvents).rows.find((x) => x.pid === r.player) || null;
   const pa = analyzePlayer({
     fight, pid: r.player, lk, damage: detail.damage, healing: detail.healing,
     casts, deaths: fightDeaths, prep, rankings, auras,

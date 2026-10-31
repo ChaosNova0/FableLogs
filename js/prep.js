@@ -37,8 +37,10 @@ const pct = (n, d) => (d ? n / d : null);
 /**
  * @param combatants  CombatantInfo events across the night (each has .fight)
  * @param potions     potion cast events across the night (each has .fight)
+ * @param buffEvents  raid and potion buff events across the night (fetchRaidBuffEvents), for pre-pots the pull
+ *                    snapshot leaves out
  */
-export function prepOverview(report, lk, combatants, potions) {
+export function prepOverview(report, lk, combatants, potions, buffEvents = []) {
   const byPlayer = new Map();
   const row = (pid) => {
     if (!byPlayer.has(pid)) byPlayer.set(pid, { pid, pulls: 0, info: 0, flask: 0, food: 0, prePot: 0, combatPots: 0, latest: null });
@@ -48,7 +50,7 @@ export function prepOverview(report, lk, combatants, potions) {
   for (const fight of report.fights || []) {
     const fc = combatants.filter((c) => c.fight === fight.id);
     const fp = potions.filter((p) => p.fight === fight.id);
-    for (const r of consumables(fight, fc, fp, lk).rows) {
+    for (const r of consumables(fight, fc, fp, lk, buffEvents.filter((e) => e.fight === fight.id)).rows) {
       const p = row(r.pid);
       p.pulls++;
       if (r.prePot) p.prePot++;

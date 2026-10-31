@@ -129,6 +129,16 @@ check('aura pre-pot', c.rows.find((r) => r.pid === 2).prePot === true);
 check('cast pre-pot', c.rows.find((r) => r.pid === 3).prePot === true);
 check('combat pot', c.rows.find((r) => r.pid === 1).combatPots === 1);
 check('no potions list', c.noPotions.join() === '4', c.noPotions.join());
+// A pre-pot the pull snapshot leaves out: the potion buff fading early in the pull, never applied during it.
+const potLk = buildLookups({ masterData: { actors: report.masterData.actors, abilities: [...report.masterData.abilities, { gameID: 105702, name: 'Potion of the Jade Serpent' }] } });
+const potBuffs = [
+  { type: 'removebuff', targetID: 4, abilityGameID: 105702, timestamp: 23000, fight: 1 },
+  { type: 'applybuff', targetID: 1, abilityGameID: 105702, timestamp: 60000, fight: 1 },   // drunk mid-pull: not a pre-pot
+  { type: 'removebuff', targetID: 1, abilityGameID: 105702, timestamp: 85000, fight: 1 },
+];
+const c2 = consumables(report.fights[0], combatants, pots, potLk, potBuffs);
+check('pre-pot from the buff fading', c2.rows.find((r) => r.pid === 4).prePot === true && c2.noPotions.length === 0, c2.noPotions.join());
+check('mid-pull potion buff is not a pre-pot', c2.rows.find((r) => r.pid === 1).prePot === false);
 
 // Utility.
 const u = utility([{ type: 'interrupt', sourceID: 4, abilityGameID: 3000, extraAbilityGameID: 3001 },

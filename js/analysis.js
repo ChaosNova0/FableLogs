@@ -318,8 +318,17 @@ function auraIcon(aura, lk) {
   return aura.icon || lk.abilities.get(aura.ability)?.icon || '';
 }
 
-export function consumables(fight, combatants, potions, lk) {
+// buffEvents: potion (and raid) buff events in the pull, from fetchRaidBuffEvents. The pull snapshot can leave out a
+// pre-pot's buff and the drink itself happens before the pull, so a potion buff whose first event in the pull is it
+// fading (or being refreshed) also counts as a pre-pot.
+export function consumables(fight, combatants, potions, lk, buffEvents = []) {
   const prePotCutoff = fight.startTime + 2000;
+  const firstPotionEvent = new Map();
+  for (const e of [...buffEvents].sort((x, y) => x.timestamp - y.timestamp)) {
+    if ((e.fight != null && e.fight !== fight.id) || !DPS_POTIONS.has(lk.abilityName(e.abilityGameID))) continue;
+    if (!firstPotionEvent.has(e.targetID)) firstPotionEvent.set(e.targetID, e);
+  }
+  const potionUpAtPull = (pid) => ['removebuff', 'refreshbuff'].includes(firstPotionEvent.get(pid)?.type);
   const rows = raidPlayers(fight, lk).map((pid) => {
     const info = combatants.find((c) => c.sourceID === pid);
     const auras = info?.auras || [];
@@ -327,7 +336,7 @@ export function consumables(fight, combatants, potions, lk) {
     const food = auras.find((a) => isFood(auraName(a, lk), auraIcon(a, lk)));
     const mine = potions.filter((p) => p.sourceID === pid && p.type === 'cast');
     const potName = (p) => lk.abilityName(p.abilityGameID);
-    const prePot = auras.some((a) => isPotion(auraName(a, lk)))
+    const prePot = auras.some((a) => isPotion(auraName(a, lk))) || potionUpAtPull(pid)
       || mine.some((p) => p.timestamp <= prePotCutoff && DPS_POTIONS.has(potName(p)));
     const combatPots = mine.filter((p) => p.timestamp > prePotCutoff && DPS_POTIONS.has(potName(p))).length;
     return {

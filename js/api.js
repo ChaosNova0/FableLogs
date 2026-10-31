@@ -474,12 +474,12 @@ export async function fetchMechanicEvents(host, code, fightIDs, { avoid = [], in
   return { damage, casts };
 }
 
-// Raid buff events (applies, refreshes, fades) for any set of pulls, to tell which buffs were up at the pull when
-// the pull snapshot leaves them out. Empty on failure.
+// Raid buff and potion buff events (applies, refreshes, fades) for any set of pulls, to tell which buffs were up at
+// the pull (and who pre-potted) when the pull snapshot leaves them out. Empty on failure.
 export async function fetchRaidBuffEvents(host, code, fightIDs) {
   try {
-    return await fetchAllEvents(host, code, { dataType: 'Buffs', fightIDs, filterExpression: nameFilter(RAID_BUFF_NAMES) },
-      `${code}:raidbuffs:${fightIDs.join(',')}`);
+    return await fetchAllEvents(host, code, { dataType: 'Buffs', fightIDs, filterExpression: nameFilter([...RAID_BUFF_NAMES, ...POTION_NAMES]) },
+      `${code}:buffevents:${fightIDs.join(',')}`);
   } catch (err) {
     if (err instanceof AuthError || err instanceof RateLimitError) throw err;
     return [];
