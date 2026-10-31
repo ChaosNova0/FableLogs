@@ -158,7 +158,7 @@ function renderAuth() {
 function openSettings(message) {
   const dlg = $('#settings');
   $('#client-id').value = getClientId();
-  $('#client-id').disabled = !!CONFIG.clientId;
+  $('#client-id-field').hidden = !!CONFIG.clientId;
   $('#show-raw').checked = store.get('fl.showRaw', false);
   $('#redirect-hint').textContent = redirectUri();
   dlg.querySelector('.settings-msg')?.remove();

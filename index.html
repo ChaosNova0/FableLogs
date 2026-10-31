@@ -37,12 +37,15 @@
   <dialog id="settings">
     <form method="dialog" class="settings-form">
       <h2>Settings</h2>
-      <label>Warcraft Logs client ID
-        <input id="client-id" type="text" spellcheck="false">
-      </label>
-      <p class="hint">Create a <em>public</em> client at
-        <a href="https://www.warcraftlogs.com/api/clients" target="_blank" rel="noopener">warcraftlogs.com/api/clients</a>
-        with redirect URL <code id="redirect-hint"></code>.</p>
+      <!-- Only shown when js/config.js has no client ID, e.g. a fresh local copy. -->
+      <div id="client-id-field">
+        <label>Warcraft Logs client ID
+          <input id="client-id" type="text" spellcheck="false">
+        </label>
+        <p class="hint">Create a <em>public</em> client at
+          <a href="https://www.warcraftlogs.com/api/clients" target="_blank" rel="noopener">warcraftlogs.com/api/clients</a>
+          with redirect URL <code id="redirect-hint"></code>.</p>
+      </div>
       <label class="check"><input id="show-raw" type="checkbox"> Show raw API data (debugging)</label>
       <div class="row">
         <button value="cancel" type="submit" class="secondary">Close</button>
