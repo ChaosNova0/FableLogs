@@ -72,8 +72,11 @@ export async function handleRedirect() {
   } catch { /* ignore */ }
   history.replaceState(null, '', redirectUri() + (pending?.returnHash || ''));
 
-  if (q.has('error')) throw new Error(q.get('error_description') || q.get('error'));
-  if (!pending || pending.state !== q.get('state')) throw new Error('Login state did not match. Please try connecting again.');
+  // Only act on a callback this tab started. Otherwise a crafted link could show its own "error" text on the
+  // page, or try to sign the visitor into someone else's account (login CSRF).
+  if (!pending) return false;
+  if (pending.state !== q.get('state')) throw new Error('Login state did not match. Please try connecting again.');
+  if (q.has('error')) throw new Error(q.get('error') === 'access_denied' ? 'Warcraft Logs login was cancelled.' : `Warcraft Logs login failed (${q.get('error')}).`);
 
   const res = await fetch(CONFIG.tokenUrl, {
     method: 'POST',

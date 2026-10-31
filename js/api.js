@@ -25,8 +25,8 @@ export function parseReportLink(input) {
   return null;
 }
 
-// The token is only ever sent to Warcraft Logs hosts.
-function isAllowedHost(host) {
+// The token is only ever sent to Warcraft Logs hosts, and links only ever point at them.
+export function isAllowedHost(host) {
   return /^([a-z0-9-]+\.)?warcraftlogs\.com$/.test(host);
 }
 
@@ -213,7 +213,9 @@ export async function fetchRankings(host, code, fight) {
 
 // Merge overlapping 10s pre-death windows so a wipe costs a few queries, not one per death.
 function mergeWindows(deaths) {
-  const spans = deaths.map((d) => [d.timestamp - DEATH_WINDOW_MS, d.timestamp + 50]).sort((a, b) => a[0] - b[0]);
+  // Timestamps are written into the query text, so make sure they really are numbers.
+  const spans = deaths.map((d) => Number(d.timestamp)).filter(Number.isFinite)
+    .map((t) => [t - DEATH_WINDOW_MS, t + 50]).sort((a, b) => a[0] - b[0]);
   const out = [];
   for (const s of spans) {
     const last = out[out.length - 1];

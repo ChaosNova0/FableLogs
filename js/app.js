@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { store } from './store.js';
 import { getClientId, setClientId, getToken, login, logout, handleRedirect, redirectUri } from './auth.js';
 import {
-  AuthError, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
+  AuthError, isAllowedHost, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones,
   clearReportCache,
 } from './api.js';
@@ -27,7 +27,8 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ESC[c]);
 function route() {
   const p = new URLSearchParams(location.hash.slice(1));
   const num = (k) => (p.get(k) ? Number(p.get(k)) : null);
-  return { code: p.get('r'), host: p.get('h') || CONFIG.defaultHost, fight: num('f'), player: num('p') };
+  const host = (p.get('h') || '').toLowerCase();
+  return { code: p.get('r'), host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p') };
 }
 
 function href({ code, host, fight, player }) {
@@ -102,7 +103,7 @@ function bindTabs() {
 
 function spellLink(lk, id, name) {
   const ab = lk.abilities.get(id);
-  const icon = ab?.icon ? `<img class="icon" alt="" loading="lazy" src="https://assets.rpglogs.com/img/warcraft/abilities/${encodeURIComponent(ab.icon)}" onerror="this.remove()">` : '';
+  const icon = ab?.icon ? `<img class="icon" alt="" loading="lazy" src="https://assets.rpglogs.com/img/warcraft/abilities/${encodeURIComponent(ab.icon)}" data-optional>` : '';
   if (!id || id <= 1) return `${icon}${esc(name)}`;
   return `<a class="spell" href="https://www.wowhead.com/${CONFIG.wowheadFlavor}/spell=${Number(id)}" target="_blank" rel="noopener">${icon}${esc(name)}</a>`;
 }
@@ -141,7 +142,16 @@ function renderAuth() {
     : '<button id="login">Connect Warcraft Logs</button>'}
     <button id="open-settings" class="icon-btn" title="Settings" aria-label="Settings">⚙</button>`;
   $('#open-settings').onclick = () => openSettings();
-  if (connected) $('#logout').onclick = () => { logout(); renderAuth(); render(); };
+  // Logging out also forgets cached report data and recent reports, which can include private logs.
+  if (connected) {
+    $('#logout').onclick = async () => {
+      logout();
+      store.remove('fl.recent');
+      await clearReportCache();
+      renderAuth();
+      render();
+    };
+  }
   else $('#login').onclick = startLogin;
 }
 
@@ -169,6 +179,12 @@ $('#clear-cache').onclick = async () => {
   $('#clear-cache').textContent = 'Cleared';
   setTimeout(() => { $('#clear-cache').textContent = 'Clear cache'; }, 1500);
 };
+
+// Icons that fail to load are removed. One listener instead of inline onerror="" handlers,
+// so the Content Security Policy can forbid inline script.
+document.addEventListener('error', (e) => {
+  if (e.target instanceof HTMLImageElement && e.target.hasAttribute('data-optional')) e.target.remove();
+}, true);
 
 $('#link-form').addEventListener('submit', (e) => {
   e.preventDefault();
@@ -334,7 +350,7 @@ function gearIcon(g) {
   if (g.permanentEnchant) extra.set('ench', g.permanentEnchant);
   const gems = (g.gems || []).map((x) => x.id).filter(Boolean);
   if (gems.length) extra.set('gems', gems.join(':'));
-  const icon = g.icon ? `<img alt="" loading="lazy" src="https://assets.rpglogs.com/img/warcraft/abilities/${encodeURIComponent(g.icon)}" onerror="this.remove()">` : '';
+  const icon = g.icon ? `<img alt="" loading="lazy" src="https://assets.rpglogs.com/img/warcraft/abilities/${encodeURIComponent(g.icon)}" data-optional>` : '';
   return `<a class="gear-item q-${QUALITY[g.quality] || 'common'}" href="https://www.wowhead.com/${CONFIG.wowheadFlavor}/item=${Number(g.id)}"
     data-wowhead="${esc(extra.toString())}" target="_blank" rel="noopener" title="${esc(SLOT_NAMES[g.slot] || '')}">
     ${icon}${g.itemLevel ? `<span class="gear-ilvl">${Number(g.itemLevel)}</span>` : ''}</a>`;

@@ -3,6 +3,16 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- Only this site and Wowhead's tooltip script may run code, and data can only go to Warcraft Logs and Wowhead.
+       The sha256 is the inline whTooltips line below: update it if that line changes. -->
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self';
+    script-src 'self' https://wow.zamimg.com 'sha256-zqIzGNoX51SJZIsqRdSn7rm/kr7+hRTfD6wZvWpL+Ms=';
+    style-src 'self' 'unsafe-inline' https://wow.zamimg.com https://use.typekit.net https://p.typekit.net;
+    font-src 'self' data: https://wow.zamimg.com https://use.typekit.net https://p.typekit.net;
+    img-src 'self' data: https://assets.rpglogs.com https://wow.zamimg.com https://*.wowhead.com https://p.typekit.net;
+    connect-src 'self' https://*.warcraftlogs.com https://*.wowhead.com https://wow.zamimg.com;
+    object-src 'none'; base-uri 'none'; form-action 'self'">
+  <meta name="referrer" content="strict-origin-when-cross-origin">
   <title>FableLogs</title>
   <meta name="description" content="Paste a Warcraft Logs link and get a plain-language raid summary: why people died, how wipes started, and who skipped consumables.">
   <link rel="stylesheet" href="css/style.css">
