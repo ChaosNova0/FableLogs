@@ -486,6 +486,17 @@ export async function fetchRaidBuffEvents(host, code, fightIDs) {
   }
 }
 
+// Casts of the given spells (raid cooldowns, Bloodlust) for any set of pulls, by name. Empty on failure.
+export async function fetchNamedCasts(host, code, fightIDs, names) {
+  try {
+    return await fetchAllEvents(host, code, { dataType: 'Casts', fightIDs, filterExpression: nameFilter(names) },
+      `${code}:namedcasts:${fightIDs.join(',')}:${[...names].sort().join('|')}`);
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof RateLimitError) throw err;
+    return [];
+  }
+}
+
 // Debuffs on enemies over one pull, for raid debuff coverage. Null on failure.
 export async function fetchEnemyDebuffs(host, code, fight) {
   try {

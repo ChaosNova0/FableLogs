@@ -22,6 +22,8 @@ A static HTML5 site: paste a Warcraft Logs report link and get a plain-language 
 - **Raid buffs & debuffs:** which of the eight MoP raid buffs everyone had at the pull, who could have brought a missing
   one, and uptime of Weakened Armor, Physical Vulnerability, magic vulnerability and Weakened Blows on the boss.
 - **Progression charts:** fight left at the end of each pull, per boss tonight and across nights on the guild page.
+- **Compare two pulls:** any two pulls of a boss in the same log side by side (outcome, deaths, avoidable hits,
+  interrupts, raid cooldown timings, per-player output with the biggest drops first, roster and buff changes).
 
 Run the rule tests by serving the folder and opening `/tests/analysis.html`.
 To see the UI without a Warcraft Logs client, open `/tests/preview.html`. It serves a made-up raid night through a stubbed API
@@ -72,6 +74,7 @@ published; `tests/` is left out because the preview page writes a fake login tok
 | `js/mechanics.js` | Avoidable abilities and interrupts per boss |
 | `js/buffs.js` | Raid buff and debuff coverage |
 | `js/charts.js` | Inline SVG progression charts |
+| `js/compare.js` | Two pulls of a boss side by side |
 | `js/app.js` | Routing and rendering |
 
 Turn on **Show raw API data** in Settings to see exactly what Warcraft Logs returned. This helps when tuning a rule.

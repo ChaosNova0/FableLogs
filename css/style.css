@@ -541,3 +541,10 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .buffs td { vertical-align: middle; }
 .buffs .meter { width: 90px; }
 .buffs td:nth-child(2) { white-space: nowrap; }
+
+/* ---------- compare two pulls ---------- */
+
+.compare-pick { display: flex; gap: .5rem; align-items: center; flex-wrap: wrap; flex-basis: 100%; border-top: 1px solid var(--border); padding-top: .75rem; }
+.compare th:nth-child(2), .compare th:nth-child(3) { width: 32%; }
+.compare.players th:nth-child(2), .compare.players th:nth-child(3) { width: auto; }
+.compare td { vertical-align: top; }

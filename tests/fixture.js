@@ -26,6 +26,8 @@ const ABILITIES = [
   [116956, 'Grace of Air', 'spell_nature_windfury.jpg'], [114239, 'Nether Tempest', 'spell_mage_nethertempest.jpg'],
   [116257, 'Invocation', 'spell_arcane_arcane03.jpg'], [113746, 'Weakened Armor', 'ability_warrior_sunder.jpg'],
   [84617, 'Revealing Strike', 'inv_sword_97.jpg'], [5171, 'Slice and Dice', 'ability_rogue_slicedice.jpg'],
+  [32182, 'Heroism', 'ability_shaman_heroism.jpg'], [64843, 'Divine Hymn', 'spell_holy_divinehymn.jpg'],
+  [98008, 'Spirit Link Totem', 'spell_shaman_spiritlink.jpg'],
   [81326, 'Physical Vulnerability', 'ability_warrior_colossussmash.jpg'], [115798, 'Weakened Blows', 'ability_warrior_thunderclap.jpg'],
 ];
 
@@ -320,6 +322,17 @@ function respond(query, variables) {
   }
   if (query.includes('damage: table')) return wrap({ damage: { data: table(null, 'dmg') }, healing: { data: table(null, 'heal') }, interrupts: { data: interrupts }, dispels: { data: dispels } });
   if (query.includes('dataType: CombatantInfo')) return wrap({ events: { data: combatants, nextPageTimestamp: null } });
+  if (query.includes('dataType: Casts') && query.includes('Divine Hymn')) {
+    // Raid cooldowns: Heroism at every pull; Divine Hymn late on the first wipe, early on the kill; Spirit Link only
+    // on the kill.
+    const want = fightsIn(query) || [];
+    const cds = FIGHTS.filter((f) => want.includes(f.id)).flatMap((f) => [
+      { timestamp: f.startTime + 2000, type: 'cast', sourceID: 5, abilityGameID: 32182, fight: f.id },
+      { timestamp: f.startTime + (f.kill ? 60_000 : 150_000), type: 'cast', sourceID: 3, abilityGameID: 64843, fight: f.id },
+      ...(f.kill ? [{ timestamp: f.startTime + 120_000, type: 'cast', sourceID: 5, abilityGameID: 98008, fight: f.id }] : []),
+    ]);
+    return wrap({ events: { data: cds, nextPageTimestamp: null } });
+  }
   if (query.includes('dataType: Casts') && query.includes('filterExpression')) return wrap({ events: { data: potions, nextPageTimestamp: null } });
   if (query.includes('dataType: Casts')) {
     const pid = Number((query.match(/sourceID: (\d+)/) || [])[1]);

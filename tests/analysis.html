@@ -569,6 +569,41 @@ const svg = progressChart([{ pct: 80, title: 'a', night: 'x' }, { pct: 40, title
 check('chart: marks, kill, divider, escaping', (svg.match(/class="pc-wipe"/g) || []).length === 3 && (svg.match(/class="pc-kill"/g) || []).length === 1
   && (svg.match(/class="pc-night"/g) || []).length === 1 && svg.includes('b&lt;') && svg.includes('href="#q"'));
 
+// ---------- compare two pulls ----------
+const { summarizePull, comparePulls, defaultComparison } = await import('../js/compare.js');
+const cmpPulls = [
+  { id: 1, kill: false, fightPercentage: 40 }, { id: 2, kill: false, fightPercentage: 9 }, { id: 3, kill: false, fightPercentage: 30 }, { id: 4, kill: true },
+];
+check('compare default: kill → best wipe', defaultComparison(cmpPulls, cmpPulls[3]).id === 2);
+check('compare default: wipe → the kill', defaultComparison(cmpPulls, cmpPulls[0]).id === 4);
+check('compare default: no kill → previous pull', defaultComparison(cmpPulls.slice(0, 3), cmpPulls[2]).id === 2 && defaultComparison(cmpPulls.slice(0, 3), cmpPulls[0]).id === 2);
+check('compare default: single pull', defaultComparison([cmpPulls[0]], cmpPulls[0]) === null);
+
+const clk = buildLookups({ masterData: {
+  actors: [1, 2, 3, 4].map((id) => ({ id, name: `P${id}`, type: 'Player', subType: 'Mage' })),
+  abilities: [{ gameID: 32182, name: 'Heroism' }, { gameID: 2825, name: 'Bloodlust' }, { gameID: 64843, name: 'Divine Hymn' }],
+} });
+const cDetail = (rows) => ({ damage: { entries: rows.map(([id, total]) => ({ id, total, icon: 'Mage-Frost', activeTime: 90000 })) }, healing: null,
+  interrupts: [], combatants: [], potions: [] });
+const fA = { id: 10, name: 'Nobody', kill: false, fightPercentage: 20, startTime: 0, endTime: 100000, friendlyPlayers: [1, 2, 3] };
+const fB = { id: 11, name: 'Nobody', kill: true, startTime: 200000, endTime: 300000, friendlyPlayers: [1, 2, 4] };
+const cInfo = () => ({ spec: 'Frost', classSpec: 'Mage-Frost', role: 'dps' });
+const cdCasts = [
+  { type: 'cast', sourceID: 1, abilityGameID: 32182, timestamp: 1000 },
+  { type: 'cast', sourceID: 1, abilityGameID: 2825, timestamp: 201000 },
+  { type: 'cast', sourceID: 2, abilityGameID: 64843, timestamp: 260000 },
+];
+const sA = summarizePull({ fight: fA, deaths: [{ targetID: 2, timestamp: 30000, fight: 10 }, { targetID: 1, timestamp: 40000, fight: 10 }], detail: cDetail([[1, 100e6], [2, 100e6], [3, 50e6]]), cdCasts }, clk, cInfo);
+const sB = summarizePull({ fight: fB, deaths: [{ targetID: 2, timestamp: 290000, fight: 11 }], detail: cDetail([[1, 120e6], [2, 50e6], [4, 80e6]]), cdCasts }, clk, cInfo);
+const cmpRes = comparePulls(sA, sB);
+check('compare: biggest drop first', cmpRes.players[0].pid === 2 && Math.abs(cmpRes.players[0].change + 0.5) < 1e-9 && cmpRes.players[1].pid === 1, JSON.stringify(cmpRes.players.map((p) => [p.pid, p.change])));
+check('compare: swaps', cmpRes.swappedIn.join() === '4' && cmpRes.swappedOut.join() === '3');
+check('compare: died in both', cmpRes.diedBoth.join() === '2');
+check('compare: lust effects merged, per pull', cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').a.length === 1 && cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').b.length === 1
+  && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').a.length === 0 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b[0].at === 60000, JSON.stringify(cmpRes.cooldowns));
+check('compare: outcome', sA.firstDeath === 30000 && sA.collapse === 40000 && sB.collapse === null && sB.remaining === 0);
+check('compare: highlights', cmpRes.highlights.some((h) => h.startsWith('The first death came later')) && cmpRes.highlights.includes('Deaths: 2 → 1.'), JSON.stringify(cmpRes.highlights));
+
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
 </script>
