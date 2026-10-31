@@ -74,6 +74,7 @@ function castBreakdown(casts, alive, lk) {
  * @param ctx.fightTables   Map fightId → { damage, healing } (fetchFightTables)
  * @param ctx.rankings      Map fightId → rankings JSON (kills only)
  * @param ctx.prep          this player's prepOverview() row, or null
+ * @param ctx.avoidable     { hits, pulls } from nightMechanics() (zero hits when clean), or null when nothing is tracked
  */
 export function analyzeNightPlayer(ctx) {
   const { report, lk, pid } = ctx;
@@ -136,6 +137,11 @@ export function analyzeNightPlayer(ctx) {
     if (activePct >= 0.9) add('good', `Active ${p}% of the time alive across the night.`);
     else add(activePct < 0.8 ? 'major' : 'minor', `Active ${p}% of the time alive across the night. Aim for 90% or more.`);
   }
+  if (ctx.avoidable?.hits) {
+    add(ctx.avoidable.hits >= 5 ? 'major' : 'minor', `Took ${ctx.avoidable.hits} avoidable hit${ctx.avoidable.hits === 1 ? '' : 's'} across ${ctx.avoidable.pulls} pull${ctx.avoidable.pulls === 1 ? '' : 's'}. Each pull's Mechanics tab names them.`);
+  } else if (ctx.avoidable) {
+    add('good', 'No avoidable hits from the tracked boss abilities.');
+  }
   if (best) add(best.parse >= 75 ? 'good' : 'info', `Best parse: ${Math.round(best.parse)} on ${best.fight.name}${parses.length > 1 ? `; ${Math.round(avgParse)} on average across ${parses.length} kills` : ''}.`);
   if (ctx.prep?.info) {
     const misses = [
@@ -163,6 +169,8 @@ export function analyzeNightPlayer(ctx) {
  * @param ctx.deaths     player death events in the fight
  * @param ctx.prep       this player's consumables row (from consumables()), or null
  * @param ctx.rankings   rankings JSON for the fight, or null
+ * @param ctx.auras      { buffs, debuffs } aura tables for this player (fetchPlayerAuras), or null
+ * @param ctx.mechanics  analyzeMechanics() result for the fight, or null
  */
 export function analyzePlayer(ctx) {
   const { fight, pid, lk } = ctx;
@@ -251,15 +259,47 @@ export function analyzePlayer(ctx) {
   }
 
   const module = SPEC_MODULES[`${String(className || '').replace(/\s+/g, '')}-${spec}`];
-  const extra = module ? module({ fight, pid, actor, spec, casts, lk, alive, entry: dmgEntry || healEntry }) || {} : {};
-  tips.push(...(extra.tips || []));
+  const uptimes = module && ctx.auras ? specUptimes(module, ctx.auras, alive) : [];
+  for (const u of uptimes) {
+    const p = Math.round(u.uptime * 100);
+    if (u.uptime >= u.target) tip('good', `${u.label} was up ${p}% of the time you were alive.`);
+    else tip(u.uptime < u.target - 0.15 ? 'major' : 'minor', `${u.label} was up ${p}% of the time you were alive. Aim for ${Math.round(u.target * 100)}% or more. ${u.tip}`);
+  }
+
+  const mine = ctx.mechanics?.players.find((p) => p.pid === pid);
+  if (mine) {
+    const list = mine.abilities.map(([name, n]) => `${name}${n > 1 ? ` ×${n}` : ''}`).join(', ');
+    tip(mine.hits >= 3 ? 'major' : 'minor', `You took ${mine.hits} avoidable hit${mine.hits === 1 ? '' : 's'} (${list}). The pull page's Mechanics tab says how to avoid each.`);
+  } else if (ctx.mechanics?.avoid.length) {
+    tip('good', 'You weren\'t hit by any of the tracked avoidable abilities.');
+  }
   tips.sort((a, b) => LEVEL_ORDER[a.level] - LEVEL_ORDER[b.level]);
 
   return {
     pid, actor, className, spec, role, alive, death, duration,
     activePct, dps, hps, overhealPct, damageTotal: dmgEntry?.total || 0, healingTotal: healEntry?.total || 0,
-    cooldowns, abilities, ranking, tips,
-    sections: extra.sections || [],
+    cooldowns, abilities, ranking, tips, uptimes,
     hasSpecModule: !!module,
   };
+}
+
+// Aura tables come back as { auras: [...] } or wrapped in { data: { auras } }; each aura has name and totalUptime (ms).
+const auraList = (table) => table?.auras || table?.data?.auras || [];
+
+/**
+ * Uptime of each spec check, over the time the player was alive. Talent checks the player never had are skipped.
+ * @param checks  SPEC_MODULES entry
+ * @param auras   { buffs, debuffs } tables from fetchPlayerAuras
+ */
+export function specUptimes(checks, auras, alive) {
+  const span = Math.max(1, alive);
+  return checks.map((c) => {
+    const found = auraList(c.kind === 'buff' ? auras.buffs : auras.debuffs).filter((a) => c.names.includes(a.name));
+    if (c.talent && !found.length) return null;
+    const ms = found.reduce((t, a) => t + (a.totalUptime || 0), 0);
+    return {
+      label: c.label || c.names[0], kind: c.kind, target: c.target, tip: c.tip,
+      abilityId: found[0]?.guid ?? null, uptime: Math.min(1, ms / span),
+    };
+  }).filter(Boolean);
 }

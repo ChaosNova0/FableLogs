@@ -16,7 +16,12 @@ A static HTML5 site: paste a Warcraft Logs report link and get a plain-language 
   make-up). The latest tier always loads (at most 25 logs); older history loads only while under 60% of your hourly
   API budget and fills in over later visits, since each log's pulls are cached once fetched.
 - **Per player:** active time, major cooldowns used vs. possible, overhealing, parse percentile, cast counts,
-  and a ranked list of tips. Click any player on a pull page.
+  buff and DoT uptimes for each spec, and a ranked list of tips. Click any player on a pull page.
+- **Mechanics:** avoidable damage per boss (who was hit by what, with how to avoid it) and enemy casts that should have
+  been interrupted, for MoP raid bosses. Hand-picked ability lists in `js/mechanics.js`, matched by name.
+- **Raid buffs & debuffs:** which of the eight MoP raid buffs everyone had at the pull, who could have brought a missing
+  one, and uptime of Weakened Armor, Physical Vulnerability, magic vulnerability and Weakened Blows on the boss.
+- **Progression charts:** fight left at the end of each pull, per boss tonight and across nights on the guild page.
 
 Run the rule tests by serving the folder and opening `/tests/analysis.html`.
 To see the UI without a Warcraft Logs client, open `/tests/preview.html`. It serves a made-up raid night through a stubbed API
@@ -63,7 +68,10 @@ published; `tests/` is left out because the preview page writes a fake login tok
 | `js/guild.js` | Guild synopsis: progression, raid-night trends, roster and attendance |
 | `js/items.js` | Item names from Wowhead tooltip data, cached and filled in after render |
 | `js/performance.js` | Per-player breakdown: active time, cooldown usage, overheal, tips |
-| `js/specs/` | Spec-specific modules (rotation, uptimes), keyed `Class-Spec` |
+| `js/specs/` | Buff and DoT uptime targets per spec, keyed `Class-Spec` |
+| `js/mechanics.js` | Avoidable abilities and interrupts per boss |
+| `js/buffs.js` | Raid buff and debuff coverage |
+| `js/charts.js` | Inline SVG progression charts |
 | `js/app.js` | Routing and rendering |
 
 Turn on **Show raw API data** in Settings to see exactly what Warcraft Logs returned. This helps when tuning a rule.

@@ -372,3 +372,12 @@ export function throughput(table, fight, lk) {
     .map((e) => ({ pid: e.id, name: e.name, subType: e.type, total: e.total || 0, perSec: (e.total || 0) / secs }))
     .sort((a, b) => b.total - a.total);
 }
+
+// How much of the fight was left when a pull ended, 0-100 (0 for kills). Prefers fightPercentage, which counts
+// phases and every boss in a council fight, over bossPercentage; either can be on a 0-10000 scale.
+export function remainingPct(f) {
+  if (f.kill) return 0;
+  const v = f.fightPercentage ?? f.bossPercentage;
+  if (v == null) return null;
+  return v > 100 ? v / 100 : v;
+}

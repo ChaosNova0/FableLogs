@@ -436,6 +436,80 @@ check('guild link: other tabs', parseGuildLink('classic.warcraftlogs.com/guild/r
 check('guild link: rejects other hosts', parseGuildLink('https://evil.example/guild/id/1') === null);
 check('parseLink: kinds', parseLink('https://classic.warcraftlogs.com/reports/AbCdEf1234567890')?.kind === 'report' && parseLink('https://classic.warcraftlogs.com/guild/id/5')?.kind === 'guild');
 
+// ---------- mechanics ----------
+const { analyzeMechanics, nightMechanics, trackedNames, mechanicsFor } = await import('../js/mechanics.js');
+const mlk = buildLookups({
+  masterData: {
+    actors: [1, 2, 3, 4].map((id) => ({ id, name: `P${id}`, type: 'Player', subType: 'Warrior' })),
+    abilities: [{ gameID: 10, name: 'Scorching Breath' }, { gameID: 11, name: 'Fearsome Roar' }, { gameID: 12, name: 'Chain Heal' }, { gameID: 13, name: 'Swirl' }],
+  },
+});
+const thok = { id: 7, name: 'Thok the Bloodthirsty', startTime: 1000, endTime: 61000 };
+const dmg = (ts, target, ab, amount, fightId = 7) => ({ timestamp: ts, type: 'damage', targetID: target, abilityGameID: ab, amount, fight: fightId });
+const mres = analyzeMechanics(thok, [dmg(2000, 1, 10, 100), dmg(3000, 2, 10, 50), dmg(4000, 2, 10, 50), dmg(5000, 3, 11, 10), dmg(99000, 2, 10, 50, 8)], [], [], mlk, (pid) => (pid === 1 ? 'tank' : 'dps'));
+const breath = mres.avoid.find((a) => a.name === 'Scorching Breath');
+check('mechanics: tank hits by frontals ignored', breath.hits === 2 && breath.players.length === 1 && breath.players[0].pid === 2, JSON.stringify(breath));
+check('mechanics: other fights ignored', breath.damage === 100);
+check('mechanics: abilities missing from the log are left out', !mres.avoid.some((a) => a.name === 'Acid Breath') && mres.untracked.includes('Acid Breath'));
+check('mechanics: players ranked', mres.players[0].pid === 2 && mres.players[0].hits === 2 && mres.players[1].pid === 3);
+check('mechanics: unknown boss', analyzeMechanics({ id: 1, name: 'Nobody', startTime: 0, endTime: 1 }, [], [], [], mlk) === null && mechanicsFor('Nobody') === null);
+const garrosh = { id: 9, name: 'Garrosh Hellscream', startTime: 0, endTime: 60000 };
+const ints = analyzeMechanics(garrosh, [], [{ timestamp: 100, type: 'cast', abilityGameID: 12, fight: 9 }, { timestamp: 200, type: 'cast', abilityGameID: 12, fight: 9 }],
+  [{ timestamp: 300, type: 'interrupt', sourceID: 3, extraAbilityGameID: 12, fight: 9 }], mlk);
+const ch = ints.interrupt.find((a) => a.name === 'Chain Heal');
+check('mechanics: interrupts counted', ch.wentOff === 2 && ch.interrupted === 1 && ch.by[0][0] === 3, JSON.stringify(ch));
+check('mechanics: summary mentions casts that went off', ints.summary.some((s) => s.startsWith('Chain Heal went off 2 times')));
+const tn = trackedNames(['Thok the Bloodthirsty', 'Garrosh Hellscream', 'Thok the Bloodthirsty']);
+check('mechanics: tracked names merged', tn.avoid.includes('Scorching Breath') && tn.avoid.includes('Desecrated') && tn.interrupt.includes('Chain Heal'));
+const night = nightMechanics([thok, { ...thok, id: 8, startTime: 90000, endTime: 120000 }], [dmg(2000, 2, 10, 50), dmg(99000, 2, 10, 50, 8), dmg(100000, 3, 10, 50, 8)], mlk, () => 'dps');
+check('mechanics: night totals', night.players[0].pid === 2 && night.players[0].hits === 2 && night.players[0].pulls === 2 && night.abilities[0].hits === 3, JSON.stringify(night));
+
+// ---------- raid buffs ----------
+const { buffCoverage, debuffCoverage, nightBuffCoverage } = await import('../js/buffs.js');
+const blk = buildLookups({ masterData: { actors: [], abilities: [{ gameID: 1, name: 'Mark of the Wild' }, { gameID: 2, name: 'Battle Shout' }] } });
+const ci = [{ sourceID: 1, auras: [{ ability: 1 }, { ability: 2 }] }, { sourceID: 2, auras: [{ ability: 2 }] }];
+const cov = buffCoverage([1, 2, 3], ci, blk, ['Druid-Feral', 'Warrior-Arms', 'Hunter-Survival']);
+const covOf = (k) => cov.find((c) => c.key === k);
+check('buffs: coverage counts players with info', covOf('stats').have === 1 && covOf('stats').total === 2 && covOf('ap').pct === 1);
+check('buffs: providers', covOf('stats').canProvide && !covOf('spellHaste').canProvide && covOf('spellHaste').hunter && !covOf('ap').hunter);
+check('buffs: spec-limited providers', covOf('crit').canProvide && !covOf('mastery').canProvide);
+check('buffs: no combatant info', buffCoverage([1], [], blk, []) === null);
+const dc = debuffCoverage({ auras: [{ name: 'Weakened Armor', totalUptime: 50000 }, { name: 'Weakened Armor', totalUptime: 90000 }, { name: 'Curse of the Elements', totalUptime: 300000 }] }, { startTime: 0, endTime: 100000 }, blk, ['Warrior-Arms']);
+check('debuffs: best uptime, capped', dc.find((d) => d.key === 'armor').uptime === 0.9 && dc.find((d) => d.key === 'magic').uptime === 1 && dc.find((d) => d.key === 'blows').uptime === 0);
+check('debuffs: no table', debuffCoverage(null, { startTime: 0, endTime: 1 }, blk, []) === null);
+const nbc = nightBuffCoverage([{ fight: { id: 1 }, coverage: cov }, { fight: { id: 2 }, coverage: null }, { fight: { id: 3 }, coverage: cov.map((c) => (c.key === 'stats' ? { ...c, have: 0, pct: 0 } : c)) }]);
+const nbStats = nbc.find((b) => b.key === 'stats');
+check('buffs: night coverage', nbc[0].pulls === 2 && nbStats.full === 0 && nbStats.missing.map((f) => f.id).join() === '3' && nbc.find((b) => b.key === 'ap').full === 2, JSON.stringify(nbStats));
+
+// ---------- spec uptimes ----------
+const { specUptimes } = await import('../js/performance.js');
+const { SPEC_MODULES } = await import('../js/specs/index.js');
+const ups = specUptimes(SPEC_MODULES['Warlock-Demonology'], { debuffs: { data: { auras: [{ name: 'Corruption', totalUptime: 40000, guid: 172 }, { name: 'Doom', totalUptime: 45000 }] } } }, 100000);
+check('uptimes: combined names', ups.length === 1 && Math.abs(ups[0].uptime - 0.85) < 1e-9 && ups[0].label === 'Corruption / Doom' && ups[0].abilityId === 172, JSON.stringify(ups));
+const mageUps = specUptimes(SPEC_MODULES['Mage-Frost'], { buffs: { auras: [{ name: 'Invocation', totalUptime: 50000 }] }, debuffs: { auras: [{ name: 'Nether Tempest', totalUptime: 200000 }] } }, 100000);
+check('uptimes: talents only when taken, capped', mageUps.map((u) => u.label).join() === 'Nether Tempest,Invocation' && mageUps[0].uptime === 1 && mageUps[1].uptime === 0.5, JSON.stringify(mageUps));
+const known = ['DeathKnight', 'Druid', 'Hunter', 'Mage', 'Monk', 'Paladin', 'Priest', 'Rogue', 'Shaman', 'Warlock', 'Warrior'];
+check('spec modules: keys are Class-Spec', Object.keys(SPEC_MODULES).every((k) => known.includes(k.split('-')[0]) && k.split('-')[1]));
+check('spec modules: well formed', Object.values(SPEC_MODULES).flat().every((c) => ['buff', 'debuff'].includes(c.kind) && c.names.length && c.target > 0 && c.target <= 1 && c.tip));
+const pu = analyzePlayer({
+  fight: { id: 1, startTime: 0, endTime: 100000 }, pid: 7, lk: buildLookups({ masterData: { actors: [{ id: 7, name: 'Shank', type: 'Player', subType: 'Rogue' }], abilities: [] } }),
+  damage: { entries: [{ id: 7, icon: 'Rogue-Combat', total: 1000, activeTime: 95000 }] }, healing: null, casts: [], deaths: [], prep: null, rankings: null,
+  auras: { buffs: { auras: [{ name: 'Slice and Dice', totalUptime: 97000 }] }, debuffs: { auras: [{ name: 'Revealing Strike', totalUptime: 60000 }] } },
+  mechanics: { avoid: [{}], players: [{ pid: 7, hits: 3, abilities: [['Swirl', 2], ['Sha Pool', 1]] }] },
+});
+check('player: uptime tips', pu.tips.some((t) => t.level === 'major' && t.text.startsWith('Revealing Strike was up 60%')) && pu.tips.some((t) => t.level === 'good' && t.text.startsWith('Slice and Dice')), JSON.stringify(pu.tips));
+check('player: avoidable tip', pu.tips.some((t) => t.level === 'major' && t.text.includes('3 avoidable hits (Swirl ×2, Sha Pool)')));
+
+// ---------- progress charts ----------
+const { remainingPct } = await import('../js/analysis.js');
+check('remaining: kill is 0', remainingPct({ kill: true, fightPercentage: 40 }) === 0);
+check('remaining: prefers fight %', remainingPct({ kill: false, fightPercentage: 40, bossPercentage: 10 }) === 40 && remainingPct({ kill: false, bossPercentage: 1234 }) === 12.34);
+const { progressChart } = await import('../js/charts.js');
+check('chart: needs two pulls', progressChart([{ pct: 50, title: 'x' }], 'c') === '');
+const svg = progressChart([{ pct: 80, title: 'a', night: 'x' }, { pct: 40, title: 'b<', night: 'x' }, { pct: 60, title: 'c', night: 'y', href: '#q' }, { pct: 0, kill: true, title: 'd', night: 'y' }], 'Chart');
+check('chart: marks, kill, divider, escaping', (svg.match(/class="pc-wipe"/g) || []).length === 3 && (svg.match(/class="pc-kill"/g) || []).length === 1
+  && (svg.match(/class="pc-night"/g) || []).length === 1 && svg.includes('b&lt;') && svg.includes('href="#q"'));
+
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
 </script>

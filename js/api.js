@@ -233,7 +233,7 @@ export async function fetchReportFights(host, reports, { budgetShare = 1 } = {})
     if (lastRate && lastRate.pointsSpentThisHour >= lastRate.limitPerHour * budgetShare) break;
     const batch = missing.slice(i, i + FIGHTS_PER_QUERY);
     const fields = batch.map((r, j) => `r${j}: report(code: ${JSON.stringify(String(r.code))}) {
-      fights(killType: Encounters) { id encounterID name kill bossPercentage startTime endTime difficulty size } }`).join(' ');
+      fights(killType: Encounters) { id encounterID name kill bossPercentage fightPercentage startTime endTime difficulty size } }`).join(' ');
     let data;
     try {
       ({ data } = await gql(host, `{ ${RATE_FIELDS} reportData { ${fields} } }`));
@@ -454,6 +454,53 @@ export async function fetchFightTables(host, code, fightIDs) {
 export function fetchPlayerCasts(host, code, fight, pid) {
   return fetchAllEvents(host, code, { dataType: 'Casts', fightIDs: [fight.id], sourceID: pid },
     `${code}:casts:${fight.id}:${pid}`);
+}
+
+const nameFilter = (names) => `ability.name in (${names.map((n) => JSON.stringify(n)).join(', ')})`;
+
+// Damage taken from the given avoidable abilities and enemy casts of the given interruptible ones, for any set of
+// pulls (filtered by name so only the relevant events come back). Returns { damage, casts }; empty lists on failure.
+export async function fetchMechanicEvents(host, code, fightIDs, { avoid = [], interrupt = [] }) {
+  const ids = fightIDs.join(',');
+  const get = (names, args, key) => (names.length
+    ? fetchAllEvents(host, code, { ...args, fightIDs, filterExpression: nameFilter(names) }, `${code}:${key}:${ids}:${names.length}`)
+      .catch((err) => { if (err instanceof AuthError || err instanceof RateLimitError) throw err; return []; })
+    : []);
+  const [damage, casts] = await Promise.all([
+    get(avoid, { dataType: 'DamageTaken' }, 'avoid'),
+    get(interrupt, { dataType: 'Casts', hostilityType: 'Enemies' }, 'enemycasts'),
+  ]);
+  return { damage, casts };
+}
+
+// Debuffs on enemies over one pull, for raid debuff coverage. Null on failure.
+export async function fetchEnemyDebuffs(host, code, fight) {
+  try {
+    const { data } = await gql(host, `query ($code: String!, $f: [Int]!) { reportData { report(code: $code) {
+      debuffs: table(dataType: Debuffs, hostilityType: Enemies, fightIDs: $f)
+    } } }`, { code, f: [fight.id] }, { cacheKey: `${code}:enemydebuffs:${fight.id}` });
+    const t = data?.reportData?.report?.debuffs;
+    return t?.data ?? t ?? null;
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return null;
+  }
+}
+
+// One player's buffs and the debuffs they applied to enemies, with uptimes, for the spec checks. Null on failure.
+export async function fetchPlayerAuras(host, code, fight, pid) {
+  try {
+    const { data } = await gql(host, `query ($code: String!, $f: [Int]!, $p: Int!) { reportData { report(code: $code) {
+      buffs: table(dataType: Buffs, fightIDs: $f, sourceID: $p)
+      debuffs: table(dataType: Debuffs, hostilityType: Enemies, fightIDs: $f, sourceID: $p)
+    } } }`, { code, f: [fight.id], p: pid }, { cacheKey: `${code}:auras:${fight.id}:${pid}` });
+    const r = data?.reportData?.report;
+    if (!r) return null;
+    return { buffs: r.buffs?.data ?? r.buffs ?? null, debuffs: r.debuffs?.data ?? r.debuffs ?? null };
+  } catch (err) {
+    if (err instanceof AuthError) throw err;
+    return null;
+  }
 }
 
 // Parse percentiles for everyone in the fight. Returns null rather than failing the page.

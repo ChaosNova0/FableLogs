@@ -5,15 +5,19 @@ import {
   AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
-  clearReportCache,
+  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, clearReportCache,
 } from './api.js';
+import { mechanicsFor, trackedNames, analyzeMechanics, nightMechanics } from './mechanics.js';
+import { buffCoverage, debuffCoverage, nightBuffCoverage } from './buffs.js';
+import { progressChart } from './charts.js';
+import { SPEC_MODULES } from './specs/index.js';
 import { prepOverview, SLOT_NAMES, ENCHANT_SLOTS } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
 import { summarizeGuild, buildRoster, buildRaidTeam, groupByExpansion, guildTotals } from './guild.js';
 import { analyzePlayer, analyzeNightPlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
-  fmtTime, fmtDuration, fmtNum, fmtPct, fmtDay,
+  fmtTime, fmtDuration, fmtNum, fmtPct, fmtDay, remainingPct,
 } from './analysis.js';
 import { classColor } from './mop.js';
 import { fillItemNames } from './items.js';
@@ -292,11 +296,21 @@ async function renderReport(r) {
   remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
   const s = summarizeReport(report, deaths, lk);
   const fightIDs = (report.fights || []).map((f) => f.id);
-  const [totals, prepData, zones] = fightIDs.length
-    ? await Promise.all([fetchReportTotals(r.host, r.code, fightIDs), fetchReportPrep(r.host, r.code, fightIDs), fetchFightZones(r.host, r.code)])
-    : [null, null, new Map()];
+  const tracked = trackedNames(s.encounters.map((e) => e.name));
+  const [totals, prepData, zones, mech] = fightIDs.length
+    ? await Promise.all([
+      fetchReportTotals(r.host, r.code, fightIDs), fetchReportPrep(r.host, r.code, fightIDs), fetchFightZones(r.host, r.code),
+      tracked.avoid.length ? fetchMechanicEvents(r.host, r.code, fightIDs, { avoid: tracked.avoid }) : null,
+    ])
+    : [null, null, new Map(), null];
   const kudos = reportKudos({ report, lk, deaths, totals });
   const prep = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions) : null;
+  const info = specInfo(lk, [totals?.damage, totals?.healing]);
+  const nm = mech ? nightMechanics(report.fights || [], mech.damage, lk, (pid) => info(pid).role) : null;
+  const nightBuffs = prepData ? nightBuffCoverage((report.fights || []).map((f) => {
+    const pids = raidPlayers(f, lk);
+    return { fight: f, coverage: buffCoverage(pids, prepData.combatants.filter((c) => c.fight === f.id), lk, pids.map((pid) => info(pid).classSpec)) };
+  })) : null;
 
   if (!s.encounters.length) {
     view.innerHTML = `${reportHeader(r, report)}<section class="card notice"><p>This report has no boss encounters.</p></section>`;
@@ -317,6 +331,7 @@ async function renderReport(r) {
     </header>
     <p class="muted">${e.pulls.length} pull${e.pulls.length === 1 ? '' : 's'} · ${e.wipes.length} wipe${e.wipes.length === 1 ? '' : 's'}</p>
     <div class="chips">${e.pulls.map(pullChip).join('')}</div>
+    ${encounterChart(e, r)}
   </article>`;
 
   // One collapsible section per raid; a log can span several (e.g. a full-tier clear).
@@ -349,7 +364,8 @@ async function renderReport(r) {
     ${tabbed('fl.tab.report', [
     { id: 'overview', label: 'Overview', html: `<div class="report-overview"><div class="report-main">${overview}</div>${reportRosterHtml(report, lk, totals, s, r)}</div>` },
     { id: 'deaths', label: 'Deaths', count: deaths.length, html: deathsTab },
-    { id: 'prep', label: 'Prep & gear', html: prepCard(prep, lk) },
+    { id: 'mechanics', label: 'Mechanics', count: nm?.players.reduce((n, p) => n + p.hits, 0), html: nm ? mechanicsNightHtml(nm, lk, r) : '' },
+    { id: 'prep', label: 'Prep & gear', html: `${raidBuffsNightHtml(nightBuffs)}${prepCard(prep, lk)}` },
   ])}
     ${rawBlock('fights', report.fights)}${prepData ? rawBlock('combatant info', prepData.combatants.slice(0, 5)) : ''}`;
   bindTabs();
@@ -496,6 +512,116 @@ function throughputCard(title, rows, lk, err, r, fight) {
   </article>`;
 }
 
+// Spec, "Class-Spec" and role per player, from whichever damage or healing tables are at hand.
+function specInfo(lk, tables) {
+  return (pid) => {
+    const spec = tables.map((t) => specOf(findEntry(t, pid))).find(Boolean) || null;
+    const cls = String(lk.actor(pid)?.subType || '').replace(/\s+/g, '');
+    return { spec, classSpec: `${cls}-${spec || ''}`, role: spec ? roleOf(cls, spec) : null };
+  };
+}
+
+// Fight left at the end of each pull of one boss tonight, when there's progress to show.
+function encounterChart(e, r) {
+  if (e.wipes.length < 2) return '';
+  return progressChart(e.pulls.map((p, i) => {
+    const pct = remainingPct(p.fight);
+    return {
+      pct, kill: p.fight.kill, href: href({ ...r, fight: p.fight.id }),
+      title: `Pull ${i + 1}: ${p.fight.kill ? 'kill' : `wipe with ${fmtPct(pct)} left`} after ${fmtTime(p.duration)}`,
+    };
+  }), `${e.name}: how much of the fight was left at the end of each pull`);
+}
+
+const meter = (pct, good, ok) => `<span class="meter"><span class="meter-fill ${pct >= good ? 'good' : pct >= ok ? 'ok' : 'low'}" style="width:${(Math.min(1, pct) * 100).toFixed(0)}%"></span></span>`;
+
+function mechanicsFightHtml(ma, lk, r, fight) {
+  if (!ma) {
+    return `<section class="card"><h2>Mechanics</h2><p class="muted">There's no mechanics list for ${esc(fight.name)} yet, so avoidable damage and interrupts aren't checked on this boss.</p></section>`;
+  }
+  const avoidRows = ma.avoid.map((a) => `<tr>
+    <td>${spellLink(lk, a.abilityId, a.name)}<div class="muted small">${esc(a.tip)}</div></td>
+    <td class="num">${a.hits || '<span class="yes">0</span>'}</td>
+    <td class="num">${a.hits ? fmtNum(a.damage) : ''}</td>
+    <td>${a.players.map((p) => `${playerLink(lk, p.pid, r, fight.id)}${p.hits > 1 ? ` <span class="muted">×${p.hits}</span>` : ''}`).join(', ')}</td>
+  </tr>`).join('');
+  const intRows = ma.interrupt.map((a) => `<tr>
+    <td>${spellLink(lk, a.abilityId, a.name)}${a.tip ? `<div class="muted small">${esc(a.tip)}</div>` : ''}</td>
+    <td class="num">${a.interrupted}</td>
+    <td class="num ${a.wentOff ? 'no' : 'yes'}">${a.wentOff}</td>
+    <td>${a.by.map(([pid, n]) => `${playerTag(lk, pid)}${n > 1 ? ` <span class="muted">×${n}</span>` : ''}`).join(', ')}</td>
+  </tr>`).join('');
+  return `<section class="card"><h2>Avoidable damage</h2>
+      ${ma.summary.length ? `<ul class="issues">${ma.summary.map((t) => `<li>${esc(t)}</li>`).join('')}</ul>` : ''}
+      ${avoidRows ? `<table class="table mechanics"><thead><tr><th>Ability</th><th class="num">Hits</th><th class="num">Damage</th><th>Who</th></tr></thead><tbody>${avoidRows}</tbody></table>`
+        : '<p class="muted">None of the tracked abilities for this boss appear in the log.</p>'}
+      <p class="hint">A hand-picked list of avoidable abilities per boss, matched by name. Tank hits from frontal abilities aren't counted.</p>
+    </section>
+    ${intRows ? `<section class="card"><h2>Interrupts</h2>
+      <table class="table mechanics"><thead><tr><th>Enemy cast</th><th class="num">Interrupted</th><th class="num">Went off</th><th>Interrupted by</th></tr></thead><tbody>${intRows}</tbody></table>
+    </section>` : ''}`;
+}
+
+function mechanicsNightHtml(nm, lk, r) {
+  if (!nm.players.length) return '<section class="card"><h2>Avoidable damage</h2><p class="yes">Nobody was hit by the tracked avoidable abilities all night.</p></section>';
+  return `<section class="grid2">
+    <article class="card"><h2>Avoidable hits by player</h2>
+      <table class="table"><thead><tr><th>Player</th><th class="num">Hits</th><th class="num">Damage</th><th class="num">Pulls</th></tr></thead><tbody>
+      ${nm.players.map((p) => `<tr><td><a class="player-link" href="${href({ ...r, fight: null, player: p.pid })}">${playerTag(lk, p.pid)}</a></td>
+        <td class="num">${p.hits}</td><td class="num">${fmtNum(p.damage)}</td><td class="num">${p.pulls}</td></tr>`).join('')}
+      </tbody></table>
+    </article>
+    <article class="card"><h2>What hit people</h2>
+      <table class="table"><thead><tr><th>Ability</th><th>Boss</th><th class="num">Hits</th></tr></thead><tbody>
+      ${nm.abilities.map((a) => `<tr><td>${spellLink(lk, a.abilityId, a.name)}<div class="muted small">${esc(a.tip)}</div></td>
+        <td class="muted">${esc(a.boss)}</td><td class="num">${a.hits}</td></tr>`).join('')}
+      </tbody></table>
+    </article>
+  </section>
+  <p class="hint">A hand-picked list of avoidable abilities per boss, matched by name. Each pull's Mechanics tab also checks interrupts.</p>`;
+}
+
+const providerNote = (b) => (b.canProvide ? 'Someone in the raid can provide it.' : b.hunter ? 'Nobody brings it, but a hunter pet could.' : 'Nobody in this raid brings it.');
+
+function raidBuffsHtml(buffs, debuffs) {
+  if (!buffs && !debuffs) return '';
+  const buffRows = (buffs || []).map((b) => `<tr><td>${esc(b.label)}</td>
+    <td>${meter(b.pct, 1, 0.75)} <span class="meter-val">${b.have}/${b.total}</span></td>
+    <td class="muted">${b.pct >= 1 ? '' : esc(providerNote(b))}</td></tr>`).join('');
+  const debuffRows = (debuffs || []).map((d) => `<tr><td>${esc(d.label)}</td>
+    <td>${meter(d.uptime, d.target, d.target - 0.2)} <span class="meter-val">${Math.round(d.uptime * 100)}%</span></td>
+    <td class="muted">${d.uptime >= d.target ? '' : esc(d.uptime ? d.tip : `${providerNote(d)} ${d.tip}`)}</td></tr>`).join('');
+  return `<article class="card"><h2>Raid buffs &amp; debuffs</h2>
+    ${buffRows ? `<table class="table buffs"><thead><tr><th>Buff</th><th>Players with it at the pull</th><th></th></tr></thead><tbody>${buffRows}</tbody></table>` : ''}
+    ${debuffRows ? `<table class="table buffs"><thead><tr><th>Debuff on enemies</th><th>Uptime</th><th></th></tr></thead><tbody>${debuffRows}</tbody></table>` : ''}
+    <p class="hint">Buffs are read from each player's auras at the pull; debuff uptime is the best of the matching debuffs across enemies.</p>
+  </article>`;
+}
+
+function raidBuffsNightHtml(nb) {
+  if (!nb) return '';
+  return `<section class="card"><h2>Raid buffs</h2>
+    <table class="table buffs"><thead><tr><th>Buff</th><th>Pulls with it on everyone</th><th></th></tr></thead><tbody>
+    ${nb.map((b) => `<tr><td>${esc(b.label)}</td>
+      <td>${meter(b.full / b.pulls, 1, 0.75)} <span class="meter-val">${b.full}/${b.pulls}</span></td>
+      <td class="muted">${b.full === b.pulls ? '' : b.missing.length ? `Missing entirely on ${b.missing.length} pull${b.missing.length === 1 ? '' : 's'}. ${esc(providerNote(b))}` : 'Some players were missing it.'}</td></tr>`).join('')}
+    </tbody></table>
+    <p class="hint">From each player's auras at the pull. Each pull's Prep &amp; utility tab also shows debuff uptime on the boss.</p>
+  </section>`;
+}
+
+function uptimesHtml(uptimes, lk) {
+  if (!uptimes.length) return '';
+  return `<section class="card"><h2>Uptimes</h2>
+    <table class="table buffs"><thead><tr><th>Buff or debuff</th><th>Uptime while alive</th><th class="num">Target</th></tr></thead><tbody>
+    ${uptimes.map((u) => `<tr><td>${spellLink(lk, u.abilityId, u.label)} <span class="muted">${u.kind === 'debuff' ? 'on enemies' : 'on you'}</span></td>
+      <td>${meter(u.uptime, u.target, u.target - 0.15)} <span class="meter-val">${Math.round(u.uptime * 100)}%</span></td>
+      <td class="num muted">${Math.round(u.target * 100)}%</td></tr>`).join('')}
+    </tbody></table>
+    <p class="hint">Debuffs on several enemies can add up, so uptime is capped at 100%.</p>
+  </section>`;
+}
+
 async function renderFight(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
@@ -505,15 +631,25 @@ async function renderFight(r) {
 
   const fightDeaths = deaths.filter((d) => d.fight === fight.id);
   setLoading(`Analysing ${fight.name}…`);
-  const [windows, detail, rankings] = await Promise.all([
+  const tracked = trackedNames([fight.name]);
+  const [windows, detail, rankings, mech, enemyDebuffs] = await Promise.all([
     fightDeaths.length ? fetchDeathWindows(r.host, r.code, fight, fightDeaths) : [],
     fetchFightDetail(r.host, r.code, fight),
     fetchRankings(r.host, r.code, fight),
+    mechanicsFor(fight.name) ? fetchMechanicEvents(r.host, r.code, [fight.id], tracked) : null,
+    fetchEnemyDebuffs(r.host, r.code, fight),
   ]);
 
   const fa = analyzeFight(fight, fightDeaths, windows, lk);
   const cons = consumables(fight, detail.combatants, detail.potions, lk);
   const kudos = fightKudos({ fight, lk, detail, deaths: fightDeaths, prep: cons, rankings });
+  const info = specInfo(lk, [detail.damage, detail.healing]);
+  const ma = mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role) : null;
+  const pids = raidPlayers(fight, lk);
+  const classSpecs = pids.map((pid) => info(pid).classSpec);
+  const buffs = buffCoverage(pids, detail.combatants, lk, classSpecs);
+  const debuffs = debuffCoverage(enemyDebuffs, fight, lk, classSpecs);
+  const avoidHits = ma ? ma.avoid.reduce((n, a) => n + a.hits, 0) : 0;
 
   const pulls = report.fights.filter((f) => f.encounterID === fight.encounterID);
   const idx = pulls.findIndex((f) => f.id === fight.id);
@@ -540,22 +676,26 @@ async function renderFight(r) {
       ${nav}
     </section>
     ${tabbed('fl.tab.fight', [
-    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>What happened</h2><ul>${fa.summary.map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>${kudosCard(kudos, lk, r, fight.id)}` },
+    { id: 'overview', label: 'Overview', html: `<section class="card takeaways"><h2>What happened</h2><ul>${[...fa.summary, ...(ma?.summary || [])].map((t) => `<li>${esc(t)}</li>`).join('')}</ul></section>${kudosCard(kudos, lk, r, fight.id)}` },
     { id: 'deaths', label: 'Deaths', count: fightDeaths.length, html: deathsTab },
+    { id: 'mechanics', label: 'Mechanics', count: avoidHits, html: mechanicsFightHtml(ma, lk, r, fight) },
     { id: 'players', label: 'Players', html: `${playersCard(fight, detail, fightDeaths, rankings, lk, r)}
       <section class="grid2">
         ${throughputCard('Damage done', throughput(detail.damage, fight, lk), lk, detail.errors.damage, r, fight)}
         ${throughputCard('Healing done', throughput(detail.healing, fight, lk), lk, detail.errors.healing, r, fight)}
       </section>` },
     { id: 'prep', label: 'Prep & utility', html: `<section class="grid2">
-        ${consumablesCard(cons, lk, detail.errors.combatants || detail.errors.potions)}
+        <div class="stack">
+          ${consumablesCard(cons, lk, detail.errors.combatants || detail.errors.potions)}
+          ${raidBuffsHtml(buffs, debuffs)}
+        </div>
         <div class="stack">
           ${utilityCard('Interrupts', utility(detail.interrupts, 'interrupt', lk), lk, detail.errors.interrupts, 'No interrupts recorded.')}
           ${utilityCard('Dispels', utility(detail.dispels, 'dispel', lk), lk, detail.errors.dispels, 'No dispels recorded.')}
         </div>
       </section>` },
   ])}
-    ${rawBlock('fight', fight)}${rawBlock('deaths', fightDeaths)}${rawBlock('death windows', windows)}${rawBlock('fight detail', detail)}`;
+    ${rawBlock('fight', fight)}${rawBlock('deaths', fightDeaths)}${rawBlock('death windows', windows)}${rawBlock('fight detail', detail)}${rawBlock('mechanic events', mech)}${rawBlock('enemy debuffs', enemyDebuffs)}`;
   bindTabs();
   bindRefresh(r);
 }
@@ -654,12 +794,20 @@ async function renderNightPlayer(r) {
   setLoading(`Analysing ${actor.name}'s night…`);
   const fightIDs = (report.fights || []).map((f) => f.id);
   const kills = (report.fights || []).filter((f) => f.kill && (f.friendlyPlayers || []).includes(r.player));
-  const [tables, prepData, rankingList] = await Promise.all([
+  const tracked = trackedNames((report.fights || []).map((f) => f.name));
+  const [tables, prepData, rankingList, mech] = await Promise.all([
     fetchFightTables(r.host, r.code, fightIDs),
     fetchReportPrep(r.host, r.code, fightIDs),
     Promise.all(kills.map((f) => fetchRankings(r.host, r.code, f))),
+    tracked.avoid.length ? fetchMechanicEvents(r.host, r.code, fightIDs, { avoid: tracked.avoid }) : null,
   ]);
   const s = summarizeReport(report, deaths, lk);
+  const tableList = [...tables.values()].flatMap((t) => [t.damage, t.healing]);
+  const info = specInfo(lk, tableList);
+  const myFights = (report.fights || []).filter((f) => (f.friendlyPlayers || []).includes(r.player) && mechanicsFor(f.name));
+  const avoidable = mech && myFights.length
+    ? nightMechanics(myFights, mech.damage, lk, (pid) => info(pid).role).players.find((p) => p.pid === r.player) || { hits: 0, pulls: 0 }
+    : null;
   const prepRow = prepData ? prepOverview(report, lk, prepData.combatants, prepData.potions).players.find((p) => p.pid === r.player) : null;
   const np = analyzeNightPlayer({
     report, lk, pid: r.player, deaths,
@@ -667,6 +815,7 @@ async function renderNightPlayer(r) {
     fightTables: tables,
     rankings: new Map(kills.map((f, i) => [f.id, rankingList[i]])),
     prep: prepRow,
+    avoidable,
   });
 
   const stat = (label, value, cls = '') => `<div class="stat ${cls}"><span class="stat-val">${value}</span><span class="stat-label">${esc(label)}</span></div>`;
@@ -725,15 +874,20 @@ async function renderPlayer(r) {
 
   setLoading(`Analysing ${actor.name}…`);
   const fightDeaths = deaths.filter((d) => d.fight === fight.id);
-  const [detail, casts, rankings] = await Promise.all([
+  const [detail, casts, rankings, mech] = await Promise.all([
     fetchFightDetail(r.host, r.code, fight),
     fetchPlayerCasts(r.host, r.code, fight, r.player),
     fetchRankings(r.host, r.code, fight),
+    mechanicsFor(fight.name) ? fetchMechanicEvents(r.host, r.code, [fight.id], trackedNames([fight.name])) : null,
   ]);
+  const info = specInfo(lk, [detail.damage, detail.healing]);
+  // Aura uptimes are only fetched for specs that have checks written.
+  const auras = SPEC_MODULES[info(r.player).classSpec] ? await fetchPlayerAuras(r.host, r.code, fight, r.player) : null;
   const prep = consumables(fight, detail.combatants, detail.potions, lk).rows.find((x) => x.pid === r.player) || null;
   const pa = analyzePlayer({
     fight, pid: r.player, lk, damage: detail.damage, healing: detail.healing,
-    casts, deaths: fightDeaths, prep, rankings,
+    casts, deaths: fightDeaths, prep, rankings, auras,
+    mechanics: mech ? analyzeMechanics(fight, mech.damage, mech.casts, detail.interrupts, lk, (pid) => info(pid).role) : null,
   });
 
   const pulls = report.fights.filter((f) => f.encounterID === fight.encounterID && (f.friendlyPlayers || []).includes(r.player));
@@ -778,9 +932,9 @@ async function renderPlayer(r) {
       ${pa.tips.length ? `<ul class="tips">${pa.tips.map((t) => `<li class="tip ${t.level}"><span class="tip-icon">${TIP_ICONS[t.level]}</span><span>${esc(t.text)}</span></li>`).join('')}</ul>`
         : '<p class="muted">Nothing to flag.</p>'}
       ${pa.death ? `<p><a href="${href({ ...r, player: null })}" data-open-tab="deaths">See the death recap on the pull page →</a></p>` : ''}
-      ${pa.hasSpecModule ? '' : `<p class="hint">These are general checks. Rotation, buff uptime and proc checks for ${esc(pa.spec || 'this spec')} ${esc(actor.subType || '')} aren't written yet.</p>`}
+      ${pa.hasSpecModule ? '' : `<p class="hint">These are general checks. Buff and DoT uptime checks for ${esc(pa.spec || 'this spec')} ${esc(actor.subType || '')} aren't written yet.</p>`}
     </section>
-    ${pa.sections.map((s) => `<section class="card"><h2>${esc(s.title)}</h2>${s.html}</section>`).join('')}
+    ${uptimesHtml(pa.uptimes, lk)}
     <section class="grid2">
       <article class="card"><h2>Cooldowns</h2>
         ${cdRows ? `<table class="table cds"><thead><tr><th>Cooldown</th><th class="num">Used / possible</th><th>When</th></tr></thead><tbody>${cdRows}</tbody></table>
@@ -793,7 +947,7 @@ async function renderPlayer(r) {
         </tbody></table>` : '<p class="muted">No casts recorded.</p>'}
       </article>
     </section>
-    ${rawBlock('casts', casts)}${rawBlock('rankings', rankings)}${rawBlock('damage entry', findEntry(detail.damage, r.player))}${rawBlock('healing entry', findEntry(detail.healing, r.player))}`;
+    ${rawBlock('casts', casts)}${rawBlock('auras', auras)}${rawBlock('rankings', rankings)}${rawBlock('damage entry', findEntry(detail.damage, r.player))}${rawBlock('healing entry', findEntry(detail.healing, r.player))}`;
   bindRefresh(r);
 }
 
@@ -840,6 +994,27 @@ function progressionHtml(r, gs) {
     </tr>`).join('')}
     </tbody></table></section>
   </details>`).join('');
+}
+
+// One chart per boss the guild had to work for this tier: every pull up to the first kill, across nights.
+function progressCurvesHtml(r, gs) {
+  const bosses = gs.raids.flatMap((raid) => raid.bosses).filter((b) => b.wipesBeforeKill >= 2);
+  if (!bosses.length) return '';
+  return `<section class="card"><h2>Progression curves</h2>
+    <p class="hint">How much of each fight was left at the end of every pull up to the first kill, oldest first. Faint lines split raid nights.</p>
+    <div class="curves">${bosses.map((b) => {
+    const firstKill = b.attempts.findIndex((a) => a.kill);
+    const attempts = firstKill >= 0 ? b.attempts.slice(0, firstKill + 1) : b.attempts;
+    return `<div class="curve">
+      <h3>${esc(b.label)}${b.variant ? ` <span class="muted">${esc(b.variant)}</span>` : ''}</h3>
+      <p class="muted small">${attempts.length} pull${attempts.length === 1 ? '' : 's'} over ${new Set(attempts.map((a) => a.code)).size} night${new Set(attempts.map((a) => a.code)).size === 1 ? '' : 's'}${firstKill >= 0 ? ` · killed ${esc(fmtDay(b.firstKill.at))}` : ''}</p>
+      ${progressChart(attempts.map((a) => ({
+    pct: a.pct, kill: a.kill, night: a.code, href: href({ code: a.code, host: r.host, fight: a.fightId }),
+    title: `${fmtDay(a.at)}: ${a.kill ? 'kill' : `wipe with ${fmtPct(a.pct)} left`} after ${fmtTime(a.duration)}`,
+  })), `${b.label}: fight left at the end of each pull`)}
+    </div>`;
+  }).join('')}</div>
+  </section>`;
 }
 
 // The report-count menu only trims this list; everything else on the guild page uses the guild's history.
@@ -1066,7 +1241,8 @@ async function renderGuild(r) {
       ${unloaded ? `<p class="hint">Boss pulls are loaded for ${withFights.length} of ${list.length} logs. Older raids fill in on later visits as your
         Warcraft Logs API budget allows (it depends on your Warcraft Logs subscription).</p>` : ''}
       ${raidTeamHtml(team, roster)}
-      ${progressionHtml(r, current)}` },
+      ${progressionHtml(r, current)}
+      ${progressCurvesHtml(r, current)}` },
     { id: 'nights', label: 'Raid nights', count: list.length, html: nightsHtml(r, list, new Map(history.nights.map((n) => [n.code, n])), limit) },
     { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}

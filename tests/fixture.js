@@ -20,6 +20,12 @@ const ABILITIES = [
   [105691, 'Flask of the Warm Sun', 'trade_alchemy_potione6.jpg'], [104277, 'Well Fed', 'spell_misc_food.jpg'],
   [105702, 'Potion of the Jade Serpent', 'trade_alchemy_potiond4.jpg'], [1766, 'Kick', 'ability_kick.jpg'],
   [116835, 'Arcane Resonance', 'spell_arcane_arcane04.jpg'], [3, 'Falling', 'ability_rogue_quickrecovery.jpg'],
+  [122336, 'Sonic Ring', 'spell_nature_cyclone.jpg'], [1126, 'Mark of the Wild', 'spell_nature_regeneration.jpg'],
+  [21562, 'Power Word: Fortitude', 'spell_holy_wordfortitude.jpg'], [6673, 'Battle Shout', 'ability_warrior_battleshout.jpg'],
+  [1459, 'Arcane Brilliance', 'spell_holy_magicalsentry.jpg'], [113742, "Swiftblade's Cunning", 'ability_rogue_slicedice.jpg'],
+  [116956, 'Grace of Air', 'spell_nature_windfury.jpg'], [114239, 'Nether Tempest', 'spell_mage_nethertempest.jpg'],
+  [116257, 'Invocation', 'spell_arcane_arcane03.jpg'], [113746, 'Weakened Armor', 'ability_warrior_sunder.jpg'],
+  [81326, 'Physical Vulnerability', 'ability_warrior_colossussmash.jpg'], [115798, 'Weakened Blows', 'ability_warrior_thunderclap.jpg'],
 ];
 
 const BOSSES = {
@@ -81,6 +87,9 @@ const combatants = FIGHTS.flatMap((f) => ids.map((pid) => ({
   auras: [
     ...((pid === 9 && f.id > 3) || (pid === 7 && f.id % 2) ? [] : [{ source: pid, ability: 105691, stacks: 1 }]),
     ...(pid === 10 && f.id === 6 ? [] : [{ source: pid, ability: 104277, stacks: 1 }]),
+    // Raid buffs. Nobody brings spell haste; Shank missed Mark of the Wild on the first pull.
+    ...[[1126, 2], [21562, 3], [6673, 1], [1459, 6], [113742, 7], [116956, 5]].filter(([ab]) => !(ab === 1126 && pid === 7 && f.id === 1))
+      .map(([ability, source]) => ({ source, ability, stacks: 1 })),
   ],
 })));
 const potions = FIGHTS.flatMap((f) => ids.filter((pid) => pid !== 9 && !ROLE[PLAYERS[pid - 1][3]]).flatMap((pid) => [
@@ -247,6 +256,32 @@ function respond(query, variables) {
     return wrap(r);
   }
   if (query.includes('rankings(')) return wrap({ rankings: rankings(fight) });
+  if (query.includes('buffs: table(dataType: Buffs')) {
+    // One player's aura uptimes (ms): Frostbyte as a Nether Tempest / Invocation frost mage, Shank as combat.
+    const span = fight.endTime - fight.startTime;
+    const up = (name, share) => ({ name, guid: ABILITIES.find((a) => a[1] === name)?.[0] ?? 0, totalUptime: Math.round(span * share), totalUses: 3 });
+    const buffs = { 6: [up('Invocation', 0.78)], 7: [up('Slice and Dice', 0.97)] }[variables.p] || [];
+    const debuffs = { 6: [up('Nether Tempest', 0.93)], 7: [up('Revealing Strike', 0.71)] }[variables.p] || [];
+    return wrap({ buffs: { data: { auras: buffs } }, debuffs: { data: { auras: debuffs } } });
+  }
+  if (query.includes('debuffs: table(dataType: Debuffs')) {
+    // Raid debuffs on the boss: armor and Weakened Blows kept up, Physical Vulnerability patchy, no spell debuff.
+    const span = fight.endTime - fight.startTime;
+    const up = (name, share) => ({ name, totalUptime: Math.round(span * share) });
+    return wrap({ debuffs: { data: { auras: [up('Weakened Armor', 0.98), up('Physical Vulnerability', 0.62), up('Weakened Blows', 0.93)] } } });
+  }
+  if (query.includes('dataType: DamageTaken') && query.includes('filterExpression')) {
+    // Avoidable hits: Lightning Fists on Feng, Sonic Ring on Zor'lok.
+    const want = fightsIn(query) || [];
+    const hits = [];
+    for (const f of FIGHTS.filter((x) => want.includes(x.id))) {
+      const plan = f.encounterID === 1390 ? [116157, [7, 7, 9, 4, 7]] : f.encounterID === 1507 ? [122336, [6, 8]] : null;
+      if (!plan) continue;
+      plan[1].forEach((pid, i) => hits.push({ timestamp: f.startTime + 15_000 * (i + 1), type: 'damage', sourceID: boss(f), targetID: pid, abilityGameID: plan[0], amount: 95_000, fight: f.id }));
+    }
+    return wrap({ events: { data: hits, nextPageTimestamp: null } });
+  }
+  if (query.includes('hostilityType: Enemies')) return wrap({ events: { data: [], nextPageTimestamp: null } });
   if (query.includes('combatants:')) {
     return wrap({
       combatants: { data: combatants.filter((c) => c.fight === fid) }, interrupts: { data: interrupts.filter((e) => e.fight === fid) },

@@ -1,5 +1,5 @@
 // Guild synopsis across many reports: progression, raid-night trends and attendance. Pure, like analysis.js.
-import { fmtTime, fmtDuration, fmtPct, fmtDay } from './analysis.js';
+import { fmtTime, fmtDuration, fmtPct, fmtDay, remainingPct } from './analysis.js';
 
 const fmtDate = (ms) => fmtDay(ms);
 const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
@@ -59,7 +59,7 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
         bosses.set(key, {
           key, encounterID: f.encounterID, name: f.name, difficulty: f.difficulty ?? null, size: f.size ?? null,
           zoneId: r.zone?.id ?? null, zone: r.zone?.name || 'Other',
-          firstSeen: r.startTime + f.startTime, lastSeen: 0, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(),
+          firstSeen: r.startTime + f.startTime, lastSeen: 0, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(), attempts: [],
         });
       }
       const b = bosses.get(key);
@@ -67,6 +67,7 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
       b.nights.add(r.code);
       const at = r.startTime + f.startTime;
       b.lastSeen = Math.max(b.lastSeen, at);
+      b.attempts.push({ at, pct: remainingPct(f), kill: !!f.kill, code: r.code, fightId: f.id, duration: f.endTime - f.startTime });
       if (f.kill) {
         if (!b.kills.length) nights[ri].newKills.push(key);
         b.kills.push({ at, duration: f.endTime - f.startTime, code: r.code, fightId: f.id });
