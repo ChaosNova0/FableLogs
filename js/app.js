@@ -9,7 +9,7 @@ import {
 } from './api.js';
 import { prepOverview, SLOT_NAMES } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
-import { summarizeGuild, buildRoster, buildRaidTeam, layoutTimeline } from './guild.js';
+import { summarizeGuild, buildRoster, buildRaidTeam } from './guild.js';
 import { analyzePlayer, analyzeNightPlayer, findEntry, findRanking, specOf } from './performance.js';
 import {
   buildLookups, playerDeaths, summarizeReport, groupByRaid, analyzeFight, consumables, utility, throughput, raidPlayers,
@@ -852,17 +852,12 @@ function bossPortrait(b) {
   </div>`;
 }
 
-// Each raid as a date line from its first night to the guild's latest: first kills sit on the line at their
-// date (greyed under the red X), raid nights are ticks, and bosses still standing wait in a row underneath.
+// Each raid as a track of its bosses in raid order. The line turns gold between consecutive kills; killed
+// bosses are greyed under the red X with their first kill date, the rest show their best attempt.
 function raidTimelineHtml(progress) {
   if (!progress.length) return '';
-  const at = (raid, t) => (raid.end > raid.start ? ((t - raid.start) / (raid.end - raid.start)) * 100 : 50);
   return `<section class="card raid-gallery"><h2>Raid progress</h2>
-    ${progress.map((raid) => {
-    const kills = layoutTimeline(raid);
-    const lanes = kills.reduce((n, k) => Math.max(n, k.lane + 1), 1);
-    const standing = raid.bosses.filter((b) => !b.killed);
-    return `<div class="raid-progress">
+    ${progress.map((raid) => `<div class="raid-progress">
       <header>
         ${raid.zoneId != null ? `<img class="zone-img" src="${zoneImage(raid.zoneId)}" alt="" loading="lazy" data-optional>` : ''}
         <div class="raid-progress-title">
@@ -871,31 +866,16 @@ function raidTimelineHtml(progress) {
         </div>
         ${raid.cleared ? '<span class="badge cleared">Cleared</span>' : `<span class="raid-count">${raid.killed}/${raid.total}</span>`}
       </header>
-      ${raid.start != null ? `<div class="timeline" style="--lanes:${lanes}">
-        <div class="tl-track"></div>
-        ${raid.nights.map((t) => `<span class="tl-night" style="left:${at(raid, t).toFixed(2)}%" title="${esc(shortDate(t))}"></span>`).join('')}
-        <span class="tl-edge tl-start">${esc(shortDate(raid.start))}</span>
-        <span class="tl-edge tl-end">${esc(shortDate(raid.end))}</span>
-        ${kills.map(({ boss, pct, lane }) => `<figure class="tl-kill boss-tile killed" style="left:${pct.toFixed(2)}%;--lane:${lane}">
-          ${bossPortrait(boss)}
-          <figcaption>
-            <span class="boss-name">${esc(boss.name)}</span>
-            <span class="boss-note">${esc(shortDate(boss.firstKill.at))}${boss.kills > 1 ? ` · ×${boss.kills}` : ''}</span>
-          </figcaption>
-        </figure>`).join('')}
-      </div>` : ''}
-      ${standing.length ? `<div class="tl-standing">
-        <span class="tl-standing-label">Still to kill</span>
-        <div class="boss-grid">${standing.map((b) => `<figure class="boss-tile">
+      <ol class="boss-track" style="--n:${raid.bosses.length}">
+        ${raid.bosses.map((b, i) => `<li class="boss-tile${b.killed ? ' killed' : ''}${b.killed && raid.bosses[i - 1]?.killed ? ' linked' : ''}">
           ${bossPortrait(b)}
-          <figcaption>
-            <span class="boss-name">${esc(b.name)}</span>
-            <span class="boss-note">${b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : b.pulls ? `${b.pulls} pulls` : 'Not attempted'}</span>
-          </figcaption>
-        </figure>`).join('')}</div>
-      </div>` : ''}
-    </div>`;
-  }).join('')}
+          <span class="boss-name">${esc(b.name)}</span>
+          <span class="boss-note">${b.killed
+    ? `${esc(shortDate(b.firstKill.at))}${b.kills > 1 ? ` · ×${b.kills}` : ''}`
+    : b.bestWipe ? `Best ${fmtPct(b.bestWipe.pct)}` : b.pulls ? `${b.pulls} pulls` : 'Not attempted'}</span>
+        </li>`).join('')}
+      </ol>
+    </div>`).join('')}
   </section>`;
 }
 

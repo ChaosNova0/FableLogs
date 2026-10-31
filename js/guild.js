@@ -40,13 +40,12 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
         bosses.set(key, {
           key, encounterID: f.encounterID, name: f.name, difficulty: f.difficulty ?? null, size: f.size ?? null,
           zoneId: r.zone?.id ?? null, zone: r.zone?.name || 'Other',
-          firstSeen: r.startTime + f.startTime, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(), nightTimes: new Set(),
+          firstSeen: r.startTime + f.startTime, pulls: 0, wipes: 0, wipesBeforeKill: 0, bestWipe: null, kills: [], nights: new Set(),
         });
       }
       const b = bosses.get(key);
       b.pulls++;
       b.nights.add(r.code);
-      b.nightTimes.add(r.startTime);
       const at = r.startTime + f.startTime;
       if (f.kill) {
         if (!b.kills.length) nights[ri].newKills.push(key);
@@ -88,7 +87,6 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
     return {
       ...b,
       nights: b.nights.size,
-      nightTimes: [...b.nightTimes],
       label,
       firstKill: b.kills[0] || null,
       lastKill: b.kills[b.kills.length - 1] || null,
@@ -120,21 +118,17 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
   }
   const raids = [...raidMap.values()].map((r) => ({ ...r, killed: r.bosses.filter((b) => b.kills.length).length }));
 
-  const progress = raidProgress(raids, zoneEncounters, nights.length ? nights[nights.length - 1].startTime : null);
+  const progress = raidProgress(raids, zoneEncounters);
   return { nights, bosses: bossList, raids, progress, takeaways: guildTakeaways(nights, bossList, progress) };
 }
 
 /**
  * One entry per raid with every boss once (all difficulties and sizes merged), in the raid's own order when
- * the site's boss list is known: { name, zoneId, killed, total, cleared, start, end, nights, bosses: [{ id, name,
- * killed, kills, firstKill, bestWipe, pulls }] }. start..end spans the raid's first night to the guild's latest
- * night, and nights are the dates the raid was pulled, for drawing it as a timeline.
+ * the site's boss list is known: { name, zoneId, killed, total, cleared, bosses: [{ id, name, killed, kills,
+ * firstKill, bestWipe, pulls }] }.
  */
-function raidProgress(raids, zoneEncounters, latestNight) {
+function raidProgress(raids, zoneEncounters) {
   return raids.map((raid) => {
-    const nights = [...new Set(raid.bosses.flatMap((b) => b.nightTimes))].sort((a, b) => a - b);
-    const start = nights[0] ?? null;
-    const end = Math.max(latestNight ?? 0, nights[nights.length - 1] ?? 0) || null;
     const byEncounter = new Map();
     for (const b of raid.bosses) {
       const e = byEncounter.get(b.encounterID) || { id: b.encounterID, name: b.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null };
@@ -149,31 +143,8 @@ function raidProgress(raids, zoneEncounters, latestNight) {
       .map((e) => byEncounter.get(e.id) || { id: e.id, name: e.name, kills: 0, pulls: 0, firstKill: null, bestWipe: null })
       .map((e) => ({ ...e, killed: e.kills > 0 }));
     const killed = bosses.filter((b) => b.killed).length;
-    return {
-      name: raid.name, zoneId: raid.zoneId, bosses, killed, total: bosses.length,
-      cleared: bosses.length > 0 && killed === bosses.length, start, end, nights,
-    };
+    return { name: raid.name, zoneId: raid.zoneId, bosses, killed, total: bosses.length, cleared: bosses.length > 0 && killed === bosses.length };
   });
-}
-
-/**
- * Places first kills along a raid's timeline. Returns [{ boss, pct, lane }] in date order: pct is 0-100 along the
- * line, and kills closer than minGap (in %) to an earlier one in the same lane drop to the next lane down.
- */
-export function layoutTimeline(raid, minGap = 14) {
-  const span = raid.end != null && raid.start != null ? raid.end - raid.start : 0;
-  const lanes = [];
-  return raid.bosses.filter((b) => b.killed)
-    .sort((a, b) => a.firstKill.at - b.firstKill.at)
-    .map((boss) => {
-      // Keep markers off the very ends so portraits and labels aren't clipped.
-      const raw = span > 0 ? ((boss.firstKill.at - raid.start) / span) * 100 : 50;
-      const pct = Math.min(94, Math.max(6, raw));
-      let lane = lanes.findIndex((last) => pct - last >= minGap);
-      if (lane === -1) lane = lanes.length;
-      lanes[lane] = pct;
-      return { boss, pct, lane };
-    });
 }
 
 function guildTakeaways(nights, bosses, progress) {
