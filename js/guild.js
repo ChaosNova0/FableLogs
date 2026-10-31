@@ -6,7 +6,7 @@ const plural = (n, word, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
 
 /**
  * @param reports  [{ code, title, startTime, endTime, zone: { id, name }, fights: [{ id, encounterID, name, kill,
- *                   bossPercentage, startTime, endTime, difficulty, size }] }] — fight times are relative to the report.
+ *                   bossPercentage, fightPercentage, startTime, endTime, difficulty, size }] }] — fight times are relative to the report.
  * @param opts.difficultyNames  Map "zoneId:difficultyId" → name, from fetchZoneInfo().
  * @param opts.zoneEncounters   Map zoneId → [{ id, name }], every boss in each raid, from fetchZoneInfo().
  * @param opts.topOnly          Only count each boss at its top size and difficulty: 25-player when the guild has pulled
@@ -75,8 +75,9 @@ export function summarizeGuild(reports, { difficultyNames = new Map(), zoneEncou
         b.wipes++;
         if (!b.kills.length) {
           b.wipesBeforeKill++;
-          if (f.bossPercentage != null && (b.bestWipe == null || f.bossPercentage < b.bestWipe.pct)) {
-            b.bestWipe = { pct: f.bossPercentage, code: r.code, fightId: f.id };
+          const pct = remainingPct(f);
+          if (pct != null && (b.bestWipe == null || pct < b.bestWipe.pct)) {
+            b.bestWipe = { pct, code: r.code, fightId: f.id };
           }
         }
       }

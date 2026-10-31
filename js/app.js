@@ -320,7 +320,7 @@ async function renderReport(r) {
 
   const pullChip = (p, i) => {
     const f = p.fight;
-    const label = f.kill ? 'Kill' : fmtPct(f.bossPercentage);
+    const label = f.kill ? 'Kill' : fmtPct(remainingPct(f));
     return `<a class="chip ${f.kill ? 'kill' : 'wipe'}" href="${href({ ...r, fight: f.id })}" title="Pull ${i + 1}: ${fmtTime(p.duration)}, ${p.deaths.length} deaths">
       <b>#${i + 1}</b> ${label} <span>${fmtTime(p.duration)}</span>${p.deaths.length ? ` <span class="deaths">☠${p.deaths.length}</span>` : ''}</a>`;
   };
@@ -671,7 +671,7 @@ async function renderFight(r) {
   view.innerHTML = `
     ${reportHeader(r, report, [{ label: `${esc(fight.name)} · pull ${idx + 1}` }])}
     <section class="fight-head card">
-      <p class="fight-meta"><span class="badge ${fight.kill ? 'kill' : 'wipe'}">${fight.kill ? 'Kill' : `Wipe · ${fmtPct(fight.bossPercentage)}`}</span>
+      <p class="fight-meta"><span class="badge ${fight.kill ? 'kill' : 'wipe'}">${fight.kill ? 'Kill' : `Wipe · ${fmtPct(remainingPct(fight))}`}</span>
         <span class="muted">${fmtTime(fight.endTime - fight.startTime)} · ${fa.raidSize} players · ${fightDeaths.length} death${fightDeaths.length === 1 ? '' : 's'}</span></p>
       ${nav}
     </section>
@@ -850,7 +850,7 @@ async function renderNightPlayer(r) {
       </tr></thead><tbody>
       ${np.rows.map((row) => `<tr>
         <td>${esc(row.fight.name)} <span class="muted">#${row.pullNo}</span></td>
-        <td><span class="badge ${row.fight.kill ? 'kill' : 'wipe'}">${row.fight.kill ? `Kill · ${fmtTime(row.duration)}` : `Wipe · ${fmtPct(row.fight.bossPercentage)}`}</span></td>
+        <td><span class="badge ${row.fight.kill ? 'kill' : 'wipe'}">${row.fight.kill ? `Kill · ${fmtTime(row.duration)}` : `Wipe · ${fmtPct(remainingPct(row.fight))}`}</span></td>
         <td class="num">${fmtNum(np.role === 'healer' ? row.hps : row.dps)}</td>
         <td class="num">${row.activePct == null ? '' : `${Math.round(row.activePct * 100)}%`}</td>
         <td class="num">${row.fight.kill ? parseBadge(row.parse) : ''}</td>
@@ -922,7 +922,7 @@ async function renderPlayer(r) {
     <section class="card fight-head">
       <div>
         <h2>${playerTag(lk, r.player)} <span class="muted">${esc(pa.spec || '')} ${esc(actor.subType || '')}</span></h2>
-        <p class="fight-meta"><span class="badge ${fight.kill ? 'kill' : 'wipe'}">${fight.kill ? 'Kill' : `Wipe · ${fmtPct(fight.bossPercentage)}`}</span>
+        <p class="fight-meta"><span class="badge ${fight.kill ? 'kill' : 'wipe'}">${fight.kill ? 'Kill' : `Wipe · ${fmtPct(remainingPct(fight))}`}</span>
           <span class="muted">${esc(ROLE_LABEL[pa.role])}</span></p>
       </div>
       ${nav}

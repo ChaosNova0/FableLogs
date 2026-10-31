@@ -96,7 +96,7 @@ export function summarizeReport(report, deaths, lk) {
   for (const enc of encounters.values()) {
     enc.kills = enc.pulls.filter((p) => p.fight.kill);
     enc.wipes = enc.pulls.filter((p) => !p.fight.kill);
-    const wipePcts = enc.wipes.map((p) => p.fight.bossPercentage).filter((v) => v != null);
+    const wipePcts = enc.wipes.map((p) => remainingPct(p.fight)).filter((v) => v != null);
     enc.bestWipe = wipePcts.length ? Math.min(...wipePcts) : null;
     enc.fastestKill = enc.kills.length ? Math.min(...enc.kills.map((p) => p.duration)) : null;
   }
@@ -296,7 +296,7 @@ export function analyzeFight(fight, deaths, windowEvents, lk) {
     summary.push(`Killed in ${duration} with ${sorted.length} death${sorted.length === 1 ? '' : 's'}.`);
     analyses.forEach((a) => summary.push(`${lk.sourceName(a.pid)} died at ${rel(a.time)}: ${a.headline}`));
   } else {
-    summary.push(`Wipe with the boss at ${fmtPct(fight.bossPercentage)} after ${duration}.`);
+    summary.push(`Wipe with ${fmtPct(remainingPct(fight))} of the fight left after ${duration}.`);
     if (analyses[0]) summary.push(`First death: ${lk.sourceName(analyses[0].pid)} at ${rel(analyses[0].time)}. ${analyses[0].headline}`);
     const decisive = analyses.filter((a) => !a.minor);
     if (collapseAt != null) {

@@ -53,7 +53,7 @@ export const BOSS_MECHANICS = {
 
   // ---------- Siege of Orgrimmar ----------
   Immerseus: { avoid: [{ name: 'Swirl', tip: 'Dodge the swirling water.' }, { name: 'Sha Pool', tip: POOL }] },
-  'The Fallen Protectors': { avoid: [{ name: 'Corrupted Brew', tip: 'Move away from where the brew lands.' }, { name: 'Noxious Poison', tip: POOL }] },
+  'Fallen Protectors': { avoid: [{ name: 'Corrupted Brew', tip: 'Move away from where the brew lands.' }, { name: 'Noxious Poison', tip: POOL }] },
   Norushen: { avoid: [{ name: 'Residual Corruption', tip: 'Don\'t walk through the corruption pools.' }] },
   'Sha of Pride': { avoid: [{ name: 'Self-Reflection', tip: 'Move away from where the reflections spawn.' }] },
   Galakras: {
