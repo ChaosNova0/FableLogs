@@ -4,7 +4,7 @@
 // name here can't claim the raid did well.
 // avoid:     { name, tip, tanksOk? }  tanksOk: a frontal or tank hit; only non-tanks hit by it count.
 // interrupt: { name, tip? }            casts by enemies that should never go off.
-import { fmtNum } from './analysis.js';
+import { fmtNum, halfRaidDownAt } from './analysis.js';
 
 const SPREAD = 'Spread out or move away from it.';
 const POOL = 'Move out of it straight away; it keeps ticking while you stand in it.';
@@ -113,7 +113,7 @@ const HIT_GAP_MS = 3000;
 function collapseTime(fight, deaths, lk) {
   const mine = deaths.filter((d) => d.fight === fight.id).sort((a, b) => a.timestamp - b.timestamp);
   const size = (fight.friendlyPlayers || []).filter((id) => lk.isPlayer(id)).length || fight.size || mine.length;
-  return mine[Math.ceil(size / 2) - 1]?.timestamp ?? null;
+  return halfRaidDownAt(mine, size);
 }
 
 /**

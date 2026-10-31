@@ -1,5 +1,5 @@
 // Two pulls of the same boss side by side: what went differently. Pure, like analysis.js.
-import { remainingPct, consumables } from './analysis.js';
+import { remainingPct, consumables, halfRaidDownAt } from './analysis.js';
 import { findEntry } from './performance.js';
 import { analyzeMechanics } from './mechanics.js';
 import { buffCoverage, debuffCoverage } from './buffs.js';
@@ -13,7 +13,7 @@ export const RAID_COOLDOWNS = [
 
 // When half the raid had died, or null if it never did (the same cut-off the pull page uses).
 function collapseAt(fight, deaths, raidSize) {
-  return fight.kill ? null : deaths[Math.ceil(raidSize / 2) - 1]?.timestamp ?? null;
+  return fight.kill ? null : halfRaidDownAt(deaths, raidSize);
 }
 
 /**

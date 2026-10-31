@@ -601,7 +601,11 @@ check('compare: swaps', cmpRes.swappedIn.join() === '4' && cmpRes.swappedOut.joi
 check('compare: died in both', cmpRes.diedBoth.join() === '2');
 check('compare: lust effects merged, per pull', cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').a.length === 1 && cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').b.length === 1
   && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').a.length === 0 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b[0].at === 60000, JSON.stringify(cmpRes.cooldowns));
-check('compare: outcome', sA.firstDeath === 30000 && sA.collapse === 40000 && sB.collapse === null && sB.remaining === 0);
+const { halfRaidDownAt } = await import('../js/analysis.js');
+// Battle res: player 1 dies three times, but half of a 4-player raid is only down once 2 different players have died.
+const rezDeaths = [{ targetID: 1, timestamp: 10 }, { targetID: 1, timestamp: 20 }, { targetID: 1, timestamp: 30 }, { targetID: 2, timestamp: 40 }];
+check('half the raid down counts players, not deaths', halfRaidDownAt(rezDeaths, 4) === 40 && halfRaidDownAt(rezDeaths.slice(0, 3), 4) === null);
+check('compare: outcome',sA.firstDeath === 30000 && sA.collapse === 40000 && sB.collapse === null && sB.remaining === 0);
 check('compare: highlights', cmpRes.highlights.some((h) => h.startsWith('The first death came later')) && cmpRes.highlights.includes('Deaths: 2 → 1.'), JSON.stringify(cmpRes.highlights));
 
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;

@@ -274,6 +274,19 @@ export function analyzeDeath(death, events, lk, ctx = {}) {
 
 // ---------- Fight level ----------
 
+// When half the raid had died: the death that brought the number of different players who had died to half the raid.
+// Counting players rather than deaths matters with battle res, where someone can die two or three times in a pull.
+// deaths must be sorted by time. Null if it never happened.
+export function halfRaidDownAt(deaths, raidSize) {
+  const need = Math.ceil(raidSize / 2);
+  const seen = new Set();
+  for (const d of deaths) {
+    seen.add(d.targetID);
+    if (need > 0 && seen.size >= need) return d.timestamp;
+  }
+  return null;
+}
+
 export function raidPlayers(fight, lk) {
   return (fight.friendlyPlayers || []).filter((id) => lk.isPlayer(id));
 }
@@ -281,8 +294,7 @@ export function raidPlayers(fight, lk) {
 export function analyzeFight(fight, deaths, windowEvents, lk) {
   const sorted = [...deaths].sort((a, b) => a.timestamp - b.timestamp);
   const raidSize = raidPlayers(fight, lk).length || fight.size || sorted.length;
-  const halfIdx = Math.ceil(raidSize / 2) - 1;
-  const collapseAt = !fight.kill && sorted[halfIdx] ? sorted[halfIdx].timestamp : null;
+  const collapseAt = fight.kill ? null : halfRaidDownAt(sorted, raidSize);
 
   const analyses = sorted.map((d, i) => analyzeDeath(d, windowEvents, lk, {
     first: i === 0 && !fight.kill,
