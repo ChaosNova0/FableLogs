@@ -11,6 +11,8 @@ export const RAID_COOLDOWNS = [
   'Revival', 'Aura Mastery', 'Devotion Aura', 'Anti-Magic Zone', 'Smoke Bomb', 'Demoralizing Banner', 'Hymn of Hope',
 ];
 
+const CHANNEL_MS = 15_000;
+
 // When half the raid had died, or null if it never did (the same cut-off the pull page uses).
 function collapseAt(fight, deaths, raidSize) {
   return fight.kill ? null : halfRaidDownAt(deaths, raidSize);
@@ -61,8 +63,14 @@ export function summarizePull(side, lk, info) {
     // The four Bloodlust effects are one thing for comparing.
     const key = ['Heroism', 'Time Warp', 'Ancient Hysteria'].includes(name) ? 'Bloodlust' : name;
     if (!cooldowns.has(key)) cooldowns.set(key, []);
-    cooldowns.get(key).push({ at: rel(c.timestamp), pid: c.sourceID });
+    // Channelled cooldowns (Tranquility, Divine Hymn) log a cast for every tick, so casts by the same player within
+    // CHANNEL_MS of their last one are the same use.
+    const list = cooldowns.get(key);
+    const last = list.findLast((x) => x.pid === c.sourceID);
+    if (last && rel(c.timestamp) - last.lastTick <= CHANNEL_MS) { last.lastTick = rel(c.timestamp); continue; }
+    list.push({ at: rel(c.timestamp), pid: c.sourceID, lastTick: rel(c.timestamp) });
   }
+  for (const list of cooldowns.values()) for (const x of list) delete x.lastTick;
 
   return {
     fight, pids, players,

@@ -592,6 +592,8 @@ const cdCasts = [
   { type: 'cast', sourceID: 1, abilityGameID: 32182, timestamp: 1000 },
   { type: 'cast', sourceID: 1, abilityGameID: 2825, timestamp: 201000 },
   { type: 'cast', sourceID: 2, abilityGameID: 64843, timestamp: 260000 },
+  { type: 'cast', sourceID: 2, abilityGameID: 64843, timestamp: 262000 },   // channel ticks: the same use
+  { type: 'cast', sourceID: 2, abilityGameID: 64843, timestamp: 264000 },
 ];
 const sA = summarizePull({ fight: fA, deaths: [{ targetID: 2, timestamp: 30000, fight: 10 }, { targetID: 1, timestamp: 40000, fight: 10 }], detail: cDetail([[1, 100e6], [2, 100e6], [3, 50e6]]), cdCasts }, clk, cInfo);
 const sB = summarizePull({ fight: fB, deaths: [{ targetID: 2, timestamp: 290000, fight: 11 }], detail: cDetail([[1, 120e6], [2, 50e6], [4, 80e6]]), cdCasts }, clk, cInfo);
@@ -600,7 +602,7 @@ check('compare: biggest drop first', cmpRes.players[0].pid === 2 && Math.abs(cmp
 check('compare: swaps', cmpRes.swappedIn.join() === '4' && cmpRes.swappedOut.join() === '3');
 check('compare: died in both', cmpRes.diedBoth.join() === '2');
 check('compare: lust effects merged, per pull', cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').a.length === 1 && cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').b.length === 1
-  && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').a.length === 0 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b[0].at === 60000, JSON.stringify(cmpRes.cooldowns));
+  && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').a.length === 0 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b[0].at === 60000 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b.length === 1 && !('lastTick' in cmpRes.cooldowns[0].a[0]), JSON.stringify(cmpRes.cooldowns));
 const { halfRaidDownAt } = await import('../js/analysis.js');
 // Battle res: player 1 dies three times, but half of a 4-player raid is only down once 2 different players have died.
 const rezDeaths = [{ targetID: 1, timestamp: 10 }, { targetID: 1, timestamp: 20 }, { targetID: 1, timestamp: 30 }, { targetID: 2, timestamp: 40 }];
