@@ -1,15 +1,16 @@
 // MoP raid buff and debuff coverage. Buffs come from each player's auras at the pull (CombatantInfo); debuffs from
-// the uptime of debuffs on enemies over the pull. Matching is by name.
+// the uptime of debuffs on enemies over the pull. Matching is by name; MoP Classic keeps some older names
+// (the mage buff is "Arcane Intellect", as in its logs), so both are listed.
 // from: classes (or "Class-Spec") that can provide it. Hunters can cover most buffs with the right pet.
 
 export const RAID_BUFFS = [
   { key: 'stats', label: '5% stats', names: ['Mark of the Wild', 'Blessing of Kings', 'Legacy of the Emperor', 'Embrace of the Shale Spider'], from: ['Druid', 'Paladin', 'Monk'], pet: true },
   { key: 'stamina', label: '10% stamina', names: ['Power Word: Fortitude', 'Commanding Shout', 'Blood Pact', 'Qiraji Fortitude'], from: ['Priest', 'Warrior', 'Warlock'], pet: true },
   { key: 'ap', label: '10% attack power', names: ['Horn of Winter', 'Trueshot Aura', 'Battle Shout'], from: ['DeathKnight', 'Hunter', 'Warrior'] },
-  { key: 'sp', label: '10% spell power', names: ['Arcane Brilliance', 'Dalaran Brilliance', 'Dark Intent', 'Burning Wrath', 'Still Water'], from: ['Mage', 'Warlock', 'Shaman'], pet: true },
+  { key: 'sp', label: '10% spell power', names: ['Arcane Brilliance', 'Arcane Intellect', 'Dalaran Brilliance', 'Dalaran Intellect', 'Dark Intent', 'Burning Wrath', 'Still Water'], from: ['Mage', 'Warlock', 'Shaman'], pet: true },
   { key: 'haste', label: '10% melee & ranged haste', names: ['Unholy Aura', "Swiftblade's Cunning", 'Unleashed Rage', 'Cackling Howl', "Serpent's Swiftness"], from: ['DeathKnight-Frost', 'DeathKnight-Unholy', 'Rogue', 'Shaman-Enhancement'], pet: true },
   { key: 'spellHaste', label: '5% spell haste', names: ['Moonkin Aura', 'Shadowform', 'Elemental Oath', 'Mind Quickening'], from: ['Druid-Balance', 'Priest-Shadow', 'Shaman-Elemental'], pet: true },
-  { key: 'crit', label: '5% critical strike', names: ['Leader of the Pack', 'Arcane Brilliance', 'Dalaran Brilliance', 'Legacy of the White Tiger', 'Bellowing Roar', 'Furious Howl', 'Terrifying Roar', 'Fearless Roar', 'Still Water'], from: ['Druid-Feral', 'Druid-Guardian', 'Mage', 'Monk-Windwalker'], pet: true },
+  { key: 'crit', label: '5% critical strike', names: ['Leader of the Pack', 'Arcane Brilliance', 'Arcane Intellect', 'Dalaran Brilliance', 'Dalaran Intellect', 'Legacy of the White Tiger', 'Bellowing Roar', 'Furious Howl', 'Terrifying Roar', 'Fearless Roar', 'Still Water'], from: ['Druid-Feral', 'Druid-Guardian', 'Mage', 'Monk-Windwalker'], pet: true },
   { key: 'mastery', label: 'Mastery', names: ['Blessing of Might', 'Grace of Air', 'Roar of Courage', 'Spirit Beast Blessing'], from: ['Paladin', 'Shaman'], pet: true },
 ];
 
