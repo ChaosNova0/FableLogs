@@ -1,0 +1,258 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FableLogs analysis tests</title>
+  <style>body { font: 14px monospace; background: #111; color: #ddd; } .pass { color: #6c6; } .fail { color: #e66; }</style>
+</head>
+<body>
+<pre id="out"></pre>
+<script type="module">
+import { buildLookups, analyzeDeath, analyzeFight, summarizeReport, consumables, utility, throughput } from '../js/analysis.js';
+import { parseReportLink } from '../js/api.js';
+
+const out = document.getElementById('out');
+let pass = 0, fail = 0;
+function check(name, cond, detail = '') {
+  if (cond) pass++; else fail++;
+  out.innerHTML += `<span class="${cond ? 'pass' : 'fail'}">${cond ? 'PASS' : 'FAIL'}</span> ${name}${cond ? '' : ` — ${detail}`}\n`;
+}
+
+const report = {
+  title: 'Test', startTime: 0,
+  fights: [
+    { id: 1, encounterID: 100, name: 'Stone Guard', kill: false, startTime: 0, endTime: 120000, bossPercentage: 34.5, size: 10, friendlyPlayers: [1, 2, 3, 4] },
+    { id: 2, encounterID: 100, name: 'Stone Guard', kill: true, startTime: 200000, endTime: 400000, bossPercentage: 0, size: 10, friendlyPlayers: [1, 2, 3, 4] },
+  ],
+  masterData: {
+    actors: [
+      { id: 1, name: 'Tanky', type: 'Player', subType: 'Warrior' },
+      { id: 2, name: 'Healz', type: 'Player', subType: 'Priest' },
+      { id: 3, name: 'Pewpew', type: 'Player', subType: 'Mage' },
+      { id: 4, name: 'Stabby', type: 'Player', subType: 'Rogue' },
+      { id: 50, name: 'Jasper Guardian', type: 'NPC', subType: 'Boss' },
+    ],
+    abilities: [
+      { gameID: 1, name: 'Melee' },
+      { gameID: 1001, name: 'Jasper Chains' },
+      { gameID: 1002, name: 'Overload' },
+      { gameID: 3, name: 'Falling' },
+      { gameID: 2001, name: 'Flash Heal' },
+      { gameID: 105691, name: 'Flask of the Warm Sun', icon: 'trade_alchemy_potione6.jpg' },
+      { gameID: 104277, name: 'Well Fed', icon: 'spell_misc_food.jpg' },
+      { gameID: 105702, name: 'Potion of the Jade Serpent' },
+      { gameID: 3000, name: 'Kick' },
+      { gameID: 3001, name: 'Cobalt Mine' },
+    ],
+  },
+};
+const lk = buildLookups(report);
+
+// Mage one-shot by Overload at 60s.
+const ev = [
+  { timestamp: 59000, type: 'heal', sourceID: 2, targetID: 3, abilityGameID: 2001, amount: 5000 },
+  { timestamp: 60000, type: 'damage', sourceID: 50, targetID: 3, abilityGameID: 1002, amount: 450000, overkill: 50000, hitPoints: 0, maxHitPoints: 400000, resourceActor: 2 },
+];
+const oneShot = analyzeDeath({ type: 'death', timestamp: 60000, targetID: 3, fight: 1 }, ev, lk);
+check('one-shot detected', oneShot.kind === 'oneshot', oneShot.kind + ': ' + oneShot.headline);
+check('one-shot names ability', oneShot.headline.includes('Overload'), oneShot.headline);
+
+// Rogue: three Jasper Chains ticks then dies, no heals.
+const ev2 = [2000, 5000, 8000, 9500].map((dt, i) => ({ timestamp: 50000 + dt, type: 'damage', sourceID: 50, targetID: 4, abilityGameID: 1001, amount: 30000, overkill: i === 3 ? 1000 : 0 }));
+const worn = analyzeDeath({ type: 'death', timestamp: 59500, targetID: 4, fight: 1 }, ev2, lk);
+check('attrition detected', worn.kind === 'attrition', worn.kind + ': ' + worn.headline);
+check('no-heal note', worn.notes.some((n) => n.startsWith('No healing or shields')), worn.notes.join(' | '));
+check('repeated ability note', worn.notes.some((n) => n.includes('Hit 4 times by Jasper Chains')), worn.notes.join(' | '));
+
+// Burst: lots of damage in final 2s.
+const ev3 = [
+  { timestamp: 51000, type: 'damage', sourceID: 50, targetID: 2, abilityGameID: 1001, amount: 5000 },
+  { timestamp: 58000, type: 'damage', sourceID: 50, targetID: 2, abilityGameID: 1002, amount: 60000 },
+  { timestamp: 59000, type: 'damage', sourceID: 50, targetID: 2, abilityGameID: 1001, amount: 60000 },
+  { timestamp: 59900, type: 'damage', sourceID: 50, targetID: 2, abilityGameID: 1002, amount: 60000, overkill: 10000 },
+];
+const burst = analyzeDeath({ type: 'death', timestamp: 60000, targetID: 2, fight: 1 }, ev3, lk);
+check('burst detected', burst.kind === 'burst', burst.kind + ': ' + burst.headline);
+
+// Tank melee death.
+const ev4 = Array.from({ length: 6 }, (_, i) => ({ timestamp: 54000 + i * 1000, type: 'damage', sourceID: 50, targetID: 1, abilityGameID: 1, amount: 40000, overkill: i === 5 ? 500 : 0 }));
+const tank = analyzeDeath({ type: 'death', timestamp: 59000, targetID: 1, fight: 1 }, ev4, lk);
+check('tank melee note', tank.notes.some((n) => n.includes('melee hits from Jasper Guardian while tanking')), tank.notes.join(' | '));
+
+// Fall.
+const fall = analyzeDeath({ type: 'death', timestamp: 10000, targetID: 4, fight: 1 },
+  [{ timestamp: 10000, type: 'damage', sourceID: -1, targetID: 4, abilityGameID: 3, amount: 99999, overkill: 1 }], lk);
+check('fall detected', fall.kind === 'fall', fall.kind);
+check('environment source', fall.notes[0].includes('Environment'), fall.notes[0]);
+
+// No events at all.
+const unk = analyzeDeath({ type: 'death', timestamp: 10000, targetID: 4, fight: 1, killingAbilityGameID: 1002 }, [], lk);
+check('unknown with killing ability', unk.kind === 'unknown' && unk.headline.includes('Overload'), unk.headline);
+
+// Fight-level wipe analysis: 4 players, collapse after 2nd death.
+const deaths = [
+  { type: 'death', timestamp: 60000, targetID: 3, fight: 1 },
+  { type: 'death', timestamp: 59500, targetID: 4, fight: 1 },
+  { type: 'death', timestamp: 90000, targetID: 1, fight: 1 },
+];
+const fa = analyzeFight(report.fights[0], deaths, [...ev, ...ev2], lk);
+check('first death is Stabby', fa.analyses[0].pid === 4, String(fa.analyses[0].pid));
+check('first death flagged', fa.analyses[0].notes.includes('First death of the pull.'));
+check('collapse at 2nd death', fa.collapseAt === 60000, String(fa.collapseAt));
+check('later death minor', fa.analyses[2].minor === true);
+check('wipe summary %', fa.summary[0].includes('35%'), fa.summary[0]);
+
+const killFa = analyzeFight(report.fights[1], [], [], lk);
+check('kill summary', killFa.summary[0].startsWith('Killed in 3:20'), killFa.summary[0]);
+
+// Report summary.
+const s = summarizeReport(report, deaths, lk);
+check('one encounter', s.encounters.length === 1);
+check('best wipe', s.encounters[0].bestWipe === 34.5);
+check('kills counted', s.encounters[0].kills.length === 1 && s.encounters[0].wipes.length === 1);
+check('takeaway mentions bosses', s.takeaways[0].startsWith('1 of 1 bosses killed, 1 wipe'), s.takeaways[0]);
+
+// Consumables.
+const combatants = [
+  { type: 'combatantinfo', sourceID: 1, auras: [{ ability: 105691 }, { ability: 104277 }] },
+  { type: 'combatantinfo', sourceID: 2, auras: [{ ability: 104277 }, { ability: 105702 }] },
+  { type: 'combatantinfo', sourceID: 3, auras: [] },
+];
+const pots = [
+  { type: 'cast', sourceID: 3, abilityGameID: 105702, timestamp: 1000 },
+  { type: 'cast', sourceID: 1, abilityGameID: 105702, timestamp: 60000 },
+];
+const c = consumables(report.fights[0], combatants, pots, lk);
+check('missing flask', c.missingFlask.join() === '2,3', c.missingFlask.join());
+check('missing food', c.missingFood.join() === '3', c.missingFood.join());
+check('aura pre-pot', c.rows.find((r) => r.pid === 2).prePot === true);
+check('cast pre-pot', c.rows.find((r) => r.pid === 3).prePot === true);
+check('combat pot', c.rows.find((r) => r.pid === 1).combatPots === 1);
+check('no potions list', c.noPotions.join() === '4', c.noPotions.join());
+
+// Utility.
+const u = utility([{ type: 'interrupt', sourceID: 4, abilityGameID: 3000, extraAbilityGameID: 3001 },
+  { type: 'interrupt', sourceID: 4, abilityGameID: 3000, extraAbilityGameID: 3001 }], 'interrupt', lk);
+check('interrupt tally', u[0].count === 2 && u[0].spells[0][0] === 3001, JSON.stringify(u));
+
+// Throughput.
+const t = throughput({ entries: [{ id: 3, name: 'Pewpew', type: 'Mage', total: 1200000 }, { id: 4, name: 'Stabby', type: 'Rogue', total: 2400000 }] }, report.fights[0], lk);
+check('throughput sorted', t[0].name === 'Stabby' && t[0].perSec === 20000, JSON.stringify(t[0]));
+
+// Link parsing.
+const p1 = parseReportLink('https://classic.warcraftlogs.com/reports/AbCdEf1234567890#fight=7&type=damage-done');
+check('parse classic link', p1 && p1.host === 'classic.warcraftlogs.com' && p1.code === 'AbCdEf1234567890' && p1.fight === 7, JSON.stringify(p1));
+const p2 = parseReportLink('warcraftlogs.com/reports/AbCdEf1234567890');
+check('parse bare www link', p2 && p2.host === 'www.warcraftlogs.com', JSON.stringify(p2));
+check('parse bare code', parseReportLink('AbCdEf1234567890')?.host === 'classic.warcraftlogs.com');
+check('reject other host', parseReportLink('https://evil.com/reports/AbCdEf1234567890') === null);
+
+// ---------- Player performance ----------
+const { analyzePlayer, specOf, findRanking } = await import('../js/performance.js');
+const pfight = { id: 9, encounterID: 100, name: 'Stone Guard', kill: true, startTime: 0, endTime: 600000, friendlyPlayers: [1, 2, 3, 4] };
+report.masterData.abilities.push({ gameID: 12472, name: 'Icy Veins' }, { gameID: 55342, name: 'Mirror Image' }, { gameID: 116, name: 'Frostbolt' });
+const plk = buildLookups(report);
+const cast = (ts, id, src = 3) => ({ type: 'cast', timestamp: ts, sourceID: src, abilityGameID: id });
+const mageCasts = [cast(1000, 12472), cast(200000, 12472), ...Array.from({ length: 100 }, (_, i) => cast(2000 + i * 5000, 116))];
+const damage = { entries: [{ id: 3, name: 'Pewpew', type: 'Mage', icon: 'Mage-Frost', total: 60_000_000, activeTime: 510000 }] };
+const healing = { entries: [{ id: 2, name: 'Healz', type: 'Priest', icon: 'Priest-Holy', total: 30_000_000, overheal: 30_000_000, activeTime: 400000 }] };
+
+check('specOf', specOf(damage.entries[0]) === 'Frost');
+const mage = analyzePlayer({ fight: pfight, pid: 3, lk: plk, damage, healing, casts: mageCasts, deaths: [], prep: null, rankings: null });
+const iv = mage.cooldowns.find((c) => c.name === 'Icy Veins');
+check('icy veins uses/possible', iv && iv.uses === 2 && iv.possible === 4, JSON.stringify(iv));
+check('mirror image never used flagged', mage.tips.some((t) => t.level === 'major' && t.text.startsWith('You never used Mirror Image')), JSON.stringify(mage.tips));
+check('active time minor tip at 85%', mage.tips.some((t) => t.level === 'minor' && t.text.startsWith('You were active 85%')), JSON.stringify(mage.tips));
+check('tips sorted major first', mage.tips[0].level === 'major');
+check('dps', Math.round(mage.dps) === 100000, String(mage.dps));
+check('frostbolt cpm', Math.abs(mage.abilities.find((a) => a.name === 'Frostbolt').cpm - 10) < 0.01);
+
+const deadMage = analyzePlayer({ fight: pfight, pid: 3, lk: plk, damage, healing, casts: mageCasts, deaths: [{ type: 'death', targetID: 3, timestamp: 300000 }], prep: null, rankings: null });
+check('death tip first', deadMage.tips[0].text.startsWith('You died at 5:00 and missed 50%'), deadMage.tips[0].text);
+check('icy veins possible shrinks when dead', deadMage.cooldowns.find((c) => c.name === 'Icy Veins').possible === 2);
+
+const priest = analyzePlayer({ fight: pfight, pid: 2, lk: plk, damage, healing, casts: [], deaths: [], prep: null, rankings: null });
+check('healer role', priest.role === 'healer');
+check('overheal 50% minor', priest.tips.some((t) => t.level === 'minor' && t.text.startsWith('50% of your healing')), JSON.stringify(priest.tips));
+check('no active-time tip for healers', !priest.tips.some((t) => t.text.includes('active')));
+
+const rk = { data: [{ fightID: 9, roles: { dps: { characters: [{ name: 'Pewpew', rankPercent: 82.4 }] } } }] };
+check('find ranking', findRanking(rk, 9, 'Pewpew')?.rankPercent === 82.4);
+const ranked = analyzePlayer({ fight: pfight, pid: 3, lk: plk, damage, healing, casts: mageCasts, deaths: [], prep: null, rankings: rk });
+check('parse tip', ranked.tips.some((t) => t.level === 'good' && t.text.startsWith('82nd percentile')), JSON.stringify(ranked.tips));
+
+// ---------- Kudos ----------
+const { fightKudos, reportKudos } = await import('../js/kudos.js');
+const kdetail = {
+  damage: { entries: [
+    { id: 3, name: 'Pewpew', type: 'Mage', icon: 'Mage-Frost', total: 12_000_000, activeTime: 115000 },
+    { id: 4, name: 'Stabby', type: 'Rogue', icon: 'Rogue-Combat', total: 9_000_000, activeTime: 50000 },
+  ] },
+  healing: { entries: [{ id: 2, name: 'Healz', type: 'Priest', icon: 'Priest-Holy', total: 6_000_000 }] },
+  interrupts: [{ type: 'interrupt', sourceID: 4, extraAbilityGameID: 3001 }],
+  dispels: [],
+};
+const krk = { data: [{ fightID: 1, roles: { dps: { characters: [{ name: 'Pewpew', rankPercent: 91 }] } } }] };
+const kprep = consumables(report.fights[0], combatants, pots, lk);
+const fk = fightKudos({ fight: report.fights[0], lk, detail: kdetail, deaths, prep: kprep, rankings: krk });
+const kudo = (title) => fk.find((k) => k.title === title);
+check('kudos top damage', kudo('Top damage')?.pids[0] === 3 && kudo('Top damage').text === '100k DPS', JSON.stringify(kudo('Top damage')));
+check('kudos top healing', kudo('Top healing')?.pids[0] === 2);
+check('kudos interrupts', kudo('Most interrupts')?.pids[0] === 4 && kudo('Most interrupts').text === '1 interrupt');
+check('kudos no dispels tile', !kudo('Most dispels'));
+check('kudos always casting (mage alive 115s of 120s)', kudo('Always casting')?.pids[0] === 3, JSON.stringify(kudo('Always casting')));
+check('kudos top parse', kudo('Top parse')?.pids[0] === 3);
+check('kudos fully prepared', kudo('Fully prepared')?.pids.join() === '1', JSON.stringify(kudo('Fully prepared')));
+check('kudos last standing on wipe', kudo('Last standing')?.pids.join() === '2', JSON.stringify(kudo('Last standing')));
+
+const rkudos = reportKudos({ report, lk, deaths, totals: { damage: kdetail.damage, healing: kdetail.healing, interrupts: kdetail.interrupts, dispels: [] } });
+const rk2 = (title) => rkudos.find((k) => k.title === title);
+check('report never died', rk2('Never died')?.pids.join() === '2', JSON.stringify(rk2('Never died')));
+check('report most damage', rk2('Most damage tonight')?.pids[0] === 3);
+check('report kudos without totals', reportKudos({ report, lk, deaths, totals: null }).every((k) => !k.title.endsWith('tonight')));
+
+// ---------- Prep & gear ----------
+const { prepOverview } = await import('../js/prep.js');
+// 19 slots in slot order; empty slots have id 0. Warrior: 2H (no off hand), legs and feet unenchanted.
+const gearOf = (ilvl, unenchanted = []) => Array.from({ length: 19 }, (_, slot) => {
+  if (slot === 16 || slot === 17) return { id: 0 };
+  if (slot === 3 || slot === 18) return { id: 5000 + slot, itemLevel: 1 };
+  return { id: 1000 + slot, itemLevel: ilvl, quality: 4, permanentEnchant: unenchanted.includes(slot) ? 0 : 4400 };
+});
+const ciNight = [
+  { type: 'combatantinfo', fight: 1, sourceID: 1, auras: [{ ability: 105691 }, { ability: 104277 }], gear: gearOf(490) },
+  { type: 'combatantinfo', fight: 2, sourceID: 1, auras: [{ ability: 104277 }], gear: gearOf(496, [6, 7]) },
+  { type: 'combatantinfo', fight: 1, sourceID: 2, auras: [{ ability: 105691 }, { ability: 104277 }], gear: gearOf(480) },
+  { type: 'combatantinfo', fight: 2, sourceID: 2, auras: [{ ability: 105691 }, { ability: 104277 }], gear: gearOf(480) },
+];
+const potsNight = [{ type: 'cast', fight: 2, sourceID: 2, abilityGameID: 105702, timestamp: 200500 }];
+const po = prepOverview(report, lk, ciNight, potsNight);
+const warrior = po.players.find((p) => p.pid === 1);
+const priestP = po.players.find((p) => p.pid === 2);
+check('prep: gear from latest pull', warrior.ilvl === 496, String(warrior.ilvl));
+check('prep: 2H counted twice over 16 slots', priestP.ilvl === 480, String(priestP.ilvl));
+check('prep: shirt/tabard excluded from gear', !warrior.gear.some((g) => g.slot === 3 || g.slot === 18));
+check('prep: missing enchants named', warrior.missingEnchants.join() === 'Legs,Feet', warrior.missingEnchants.join());
+check('prep: flask 1 of 2', warrior.flaskPct === 0.5 && warrior.flaskMissed === 1);
+check('prep: priest pre-pot 1 of 2', priestP.prePotPct === 0.5, String(priestP.prePotPct));
+check('prep: sorted by ilvl', po.players[0].pid === 1);
+check('prep: no-info players have null rates', po.players.find((p) => p.pid === 3).flaskPct === null);
+check('prep: issues mention flask and enchants', po.issues.some((i) => i.startsWith('Pulled without a flask: Tanky (1/2)')) && po.issues.some((i) => i.includes('Tanky (legs, feet)')), JSON.stringify(po.issues));
+check('prep: raid flask rate', po.flaskPct === 0.75, String(po.flaskPct));
+
+// ---------- Raid grouping ----------
+const { groupByRaid } = await import('../js/analysis.js');
+const enc = (id, start, kill) => ({ id, name: `Boss ${id}`, pulls: [{ fight: { id, startTime: start } }], kills: kill ? [{}] : [] });
+const zoneMap = { 1: { id: 10, name: 'Heart of Fear' }, 2: { id: 20, name: "Mogu'shan Vaults" }, 3: { id: 10, name: 'Heart of Fear' } };
+const grouped = groupByRaid([enc(1, 500, true), enc(2, 100, true), enc(3, 900, false)], (f) => zoneMap[f.id]);
+check('raids: grouped by zone', grouped.length === 2 && grouped.map((g) => g.encounters.length).join() === '1,2', JSON.stringify(grouped.map((g) => g.name)));
+check('raids: ordered by first pull', grouped[0].name === "Mogu'shan Vaults", grouped[0].name);
+check('raids: kill count', grouped[1].killed === 1 && grouped[1].pulls === 2);
+const single = groupByRaid([enc(1, 0, true), enc(2, 10, false)], () => null, "Mogu'shan Vaults");
+check('raids: no zone data falls back to report zone', single.length === 1 && single[0].name === "Mogu'shan Vaults", JSON.stringify(single));
+
+out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
+document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
+</script>
+</body>
+</html>

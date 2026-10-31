@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>FableLogs phone preview</title>
+  <style>
+    body { margin: 0; background: #555; }
+    iframe { display: block; width: 390px; height: 1700px; border: 0; background: #fff; }
+  </style>
+</head>
+<body>
+  <!-- Shows the preview at phone width; headless browsers won't size a window below ~500px. Pass the preview URL after "#". -->
+  <iframe id="f" title="Phone preview"></iframe>
+  <script>
+    document.getElementById('f').src = 'preview.html' + decodeURIComponent(location.hash.slice(1));
+  </script>
+</body>
+</html>

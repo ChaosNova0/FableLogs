@@ -1,0 +1,50 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>FableLogs</title>
+  <meta name="description" content="Paste a Warcraft Logs link and get a plain-language raid summary: why people died, how wipes started, and who skipped consumables.">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#">Fable<span>Logs</span></a>
+    <form id="link-form" class="link-form" autocomplete="off">
+      <input id="link-input" type="text" placeholder="Paste a Warcraft Logs report link" aria-label="Warcraft Logs report link">
+      <button type="submit">Analyse</button>
+    </form>
+    <div id="auth-area" class="auth-area"></div>
+  </header>
+
+  <main id="view" class="view"></main>
+
+  <footer class="footer">
+    <span id="rate-limit"></span>
+    <span>Data from <a href="https://www.warcraftlogs.com" target="_blank" rel="noopener">Warcraft Logs</a>. Not affiliated.</span>
+  </footer>
+
+  <dialog id="settings">
+    <form method="dialog" class="settings-form">
+      <h2>Settings</h2>
+      <label>Warcraft Logs client ID
+        <input id="client-id" type="text" spellcheck="false">
+      </label>
+      <p class="hint">Create a <em>public</em> client at
+        <a href="https://www.warcraftlogs.com/api/clients" target="_blank" rel="noopener">warcraftlogs.com/api/clients</a>
+        with redirect URL <code id="redirect-hint"></code>.</p>
+      <label class="check"><input id="show-raw" type="checkbox"> Show raw API data (debugging)</label>
+      <div class="row">
+        <button value="cancel" type="submit" class="secondary">Close</button>
+        <button id="clear-cache" type="button" class="secondary">Clear cache</button>
+        <button value="save" type="submit">Save</button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- Wowhead hover tooltips for every link to wowhead.com/mop-classic/spell=… -->
+  <script>const whTooltips = { colorLinks: false, iconizeLinks: false, renameLinks: false };</script>
+  <script src="https://wow.zamimg.com/js/tooltips.js" async></script>
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>
