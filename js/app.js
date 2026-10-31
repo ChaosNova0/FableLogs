@@ -7,7 +7,7 @@ import {
   fetchGuild, fetchGuildReports, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   clearReportCache,
 } from './api.js';
-import { prepOverview, SLOT_NAMES } from './prep.js';
+import { prepOverview, SLOT_NAMES, ENCHANT_SLOTS } from './prep.js';
 import { fightKudos, reportKudos } from './kudos.js';
 import { summarizeGuild, buildRoster, buildRaidTeam } from './guild.js';
 import { analyzePlayer, analyzeNightPlayer, findEntry, findRanking, specOf } from './performance.js';
@@ -603,6 +603,36 @@ function reportRosterHtml(report, lk, totals, s, r) {
   </aside>`;
 }
 
+// One player's gear, laid out like the character sheet: armour on the left, jewellery and weapons on the right.
+const GEAR_COLUMNS = [[0, 1, 2, 14, 4, 8, 9, 5], [6, 7, 10, 11, 12, 13, 15, 16]];
+
+function playerGearHtml(prepRow) {
+  if (!prepRow?.gear.length) {
+    return '<section class="card"><h2>Gear</h2><p class="muted">No gear in this log. It needs Advanced Combat Logging turned on in game.</p></section>';
+  }
+  const bySlot = new Map(prepRow.gear.map((g) => [g.slot, g]));
+  const row = (slot) => {
+    const g = bySlot.get(slot);
+    if (!g) return `<li class="gear-row empty"><span class="gear-item q-poor"></span><span class="gear-slot">${esc(SLOT_NAMES[slot])}</span><span class="muted">Empty</span></li>`;
+    const gems = (g.gems || []).filter((x) => x.id).length;
+    const enchant = ENCHANT_SLOTS.includes(slot)
+      ? (g.permanentEnchant ? '<span class="yes">Enchanted</span>' : '<span class="no">No enchant</span>') : '';
+    return `<li class="gear-row">
+      ${gearIcon(g)}
+      <span class="gear-slot">${esc(SLOT_NAMES[slot])}</span>
+      <span class="gear-meta">${g.itemLevel ? `<b>${Number(g.itemLevel)}</b>` : ''}${gems ? ` · ${gems} gem${gems === 1 ? '' : 's'}` : ''}</span>
+      <span class="gear-enchant">${enchant}</span>
+    </li>`;
+  };
+  // A two-hander leaves the off hand empty, which isn't a problem worth showing.
+  const shown = (slot) => bySlot.has(slot) || slot !== 16;
+  return `<section class="card"><h2>Gear <span class="muted">${prepRow.ilvl ? `· item level ${prepRow.ilvl.toFixed(1)}` : ''}</span></h2>
+    ${prepRow.missingEnchants.length ? `<p class="no">Missing enchants: ${esc(prepRow.missingEnchants.join(', '))}</p>` : '<p class="yes">Every enchantable slot is enchanted.</p>'}
+    <div class="gear-sheet">${GEAR_COLUMNS.map((col) => `<ul class="gear-list">${col.filter(shown).map(row).join('')}</ul>`).join('')}</div>
+    <p class="hint">From their last pull of the night. Hover an item for its Wowhead tooltip with enchant and gems.</p>
+  </section>`;
+}
+
 async function renderNightPlayer(r) {
   setLoading('Loading report…');
   const { report, lk, deaths } = await loadReport(r);
@@ -635,6 +665,7 @@ async function renderNightPlayer(r) {
     np.avgParse != null ? stat('Average parse', `${Math.round(np.avgParse)}`, `parse-${parseTier(np.avgParse)}`) : '',
     np.bestParse != null ? stat('Best parse', `${Math.round(np.bestParse)}`, `parse-${parseTier(np.bestParse)}`) : '',
     stat('Deaths', `${np.deaths} / ${np.rows.length}`),
+    prepRow?.ilvl ? stat('Item level', prepRow.ilvl.toFixed(1)) : '',
     stat('Time in boss fights', fmtDuration(np.time)),
   ].join('');
 
@@ -651,6 +682,7 @@ async function renderNightPlayer(r) {
       ${np.highlights.length ? `<ul class="tips">${np.highlights.map((t) => `<li class="tip ${t.level}"><span class="tip-icon">${TIP_ICONS[t.level]}</span><span>${esc(t.text)}</span></li>`).join('')}</ul>`
         : '<p class="muted">Nothing to flag.</p>'}
     </section>
+    ${playerGearHtml(prepRow)}
     <section class="card"><h2>Boss by boss</h2>
       <p class="hint">Open a pull for that boss's cooldown usage, casts, tips and death recap.</p>
       <table class="table night-pulls"><thead><tr>

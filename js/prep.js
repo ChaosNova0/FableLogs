@@ -8,7 +8,7 @@ export const SLOT_NAMES = [
 ];
 
 // Slots everyone can enchant in MoP. Rings are enchanter-only and heads have no enchants, so neither is judged.
-const ENCHANT_SLOTS = [2, 4, 6, 7, 8, 9, 14, 15, 16];
+export const ENCHANT_SLOTS = [2, 4, 6, 7, 8, 9, 14, 15, 16];
 // Shirt, ranged (gone in MoP) and tabard don't count toward item level.
 const SKIP_ILVL = new Set([3, 17, 18]);
 const ILVL_SLOTS = 16;
