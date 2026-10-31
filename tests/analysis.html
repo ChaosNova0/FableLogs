@@ -599,13 +599,13 @@ const sA = summarizePull({ fight: fA, deaths: [{ targetID: 2, timestamp: 30000, 
 const sB = summarizePull({ fight: fB, deaths: [{ targetID: 2, timestamp: 290000, fight: 11 }], detail: cDetail([[1, 120e6], [2, 50e6], [4, 80e6]]), cdCasts }, clk, cInfo);
 const cmpRes = comparePulls(sA, sB);
 // Output is per second alive: P2 did 100M in 30s alive (A), then 50M in 90s alive (B).
-check('compare: biggest drop first, per second alive', cmpRes.players[0].pid === 2 && Math.abs(cmpRes.players[0].change - ((50e6 / 90) / (100e6 / 30) - 1)) < 1e-9
-  && cmpRes.players[1].pid === 1 && Math.abs(sA.players.get(3).dps - 500000) < 1e-6, JSON.stringify(cmpRes.players.map((p) => [p.pid, p.change])));
+check('compare: biggest drop first, per second alive', cmpRes.players[0].key === 'P2-' && Math.abs(cmpRes.players[0].change - ((50e6 / 90) / (100e6 / 30) - 1)) < 1e-9
+  && cmpRes.players[1].key === 'P1-' && Math.abs(sA.players.get('P3-').dps - 500000) < 1e-6, JSON.stringify(cmpRes.players.map((p) => [p.key, p.change])));
 // Battle-ressed and killed again: measured over the whole pull.
 const sRez = summarizePull({ fight: fA, deaths: [{ targetID: 1, timestamp: 20000, fight: 10 }, { targetID: 1, timestamp: 60000, fight: 10 }], detail: cDetail([[1, 100e6]]), cdCasts: [] }, clk, cInfo);
-check('compare: died twice is measured over the whole pull', Math.abs(sRez.players.get(1).dps - 1e6) < 1e-6);
+check('compare: died twice is measured over the whole pull', Math.abs(sRez.players.get('P1-').dps - 1e6) < 1e-6);
 check('compare: swaps', cmpRes.swappedIn.join() === '4' && cmpRes.swappedOut.join() === '3');
-check('compare: died in both', cmpRes.diedBoth.join() === '2');
+check('compare: died in both', cmpRes.diedBoth.join() === 'P2-');
 check('compare: lust effects merged, per pull', cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').a.length === 1 && cmpRes.cooldowns.find((x) => x.name === 'Bloodlust').b.length === 1
   && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').a.length === 0 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b[0].at === 60000 && cmpRes.cooldowns.find((x) => x.name === 'Divine Hymn').b.length === 1 && !('lastTick' in cmpRes.cooldowns[0].a[0]), JSON.stringify(cmpRes.cooldowns));
 const { halfRaidDownAt } = await import('../js/analysis.js');
@@ -614,6 +614,12 @@ const rezDeaths = [{ targetID: 1, timestamp: 10 }, { targetID: 1, timestamp: 20 
 check('half the raid down counts players, not deaths', halfRaidDownAt(rezDeaths, 4) === 40 && halfRaidDownAt(rezDeaths.slice(0, 3), 4) === null);
 check('compare: outcome',sA.firstDeath === 30000 && sA.collapse === 40000 && sB.collapse === null && sB.remaining === 0);
 check('compare: highlights', cmpRes.highlights.some((h) => h.startsWith('The first death came later')) && cmpRes.highlights.includes('Deaths: 2 → 1.'), JSON.stringify(cmpRes.highlights));
+// Across logs the same players have different actor ids, so they're matched by name and server.
+const lk2 = buildLookups({ masterData: { actors: [[7, 'P1'], [8, 'P2'], [9, 'P5']].map(([id, name]) => ({ id, name, type: 'Player', subType: 'Mage' })), abilities: [] } });
+const sX = summarizePull({ fight: { ...fB, id: 3, friendlyPlayers: [7, 8, 9] }, deaths: [{ targetID: 8, timestamp: 250000, fight: 3 }], detail: cDetail([[7, 120e6], [8, 100e6], [9, 80e6]]), cdCasts: [] }, lk2, cInfo);
+const cross = comparePulls(sA, sX);
+check('compare across logs: players matched by name', cross.players.find((p) => p.key === 'P1-')?.a?.pid === 1 && cross.players.find((p) => p.key === 'P1-')?.b?.pid === 7
+  && cross.diedBoth.join() === 'P2-' && cross.swappedIn.join() === '9' && cross.swappedOut.join() === '3', JSON.stringify({ d: cross.diedBoth, i: cross.swappedIn, o: cross.swappedOut }));
 
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;

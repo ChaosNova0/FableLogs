@@ -548,3 +548,6 @@ dialog::backdrop { background: rgba(0, 0, 0, .5); }
 .compare th:nth-child(2), .compare th:nth-child(3) { width: 32%; }
 .compare.players th:nth-child(2), .compare.players th:nth-child(3) { width: auto; }
 .compare td { vertical-align: top; }
+.compare-log { display: flex; gap: .5rem; align-items: center; flex: 1 1 360px; flex-wrap: wrap; margin: 0; }
+.compare-log input { flex: 1 1 240px; min-width: 0; }
+.compare-log .form-error { flex-basis: 100%; font-size: .85rem; }

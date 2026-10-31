@@ -28,10 +28,12 @@ function collapseAt(fight, deaths, raidSize) {
  * @param side.buffEvents     raid buff events in the fight
  * @param side.cdCasts        raid cooldown casts (any fights; filtered here)
  * @param info                pid → { spec, classSpec, role }
+ * Players are keyed by name and server rather than actor id, since ids differ between logs.
  */
 export function summarizePull(side, lk, info) {
   const { fight } = side;
   const pids = (fight.friendlyPlayers || []).filter((id) => lk.isPlayer(id));
+  const keyOf = (pid) => { const a = lk.actor(pid); return `${a?.name || pid}-${a?.server || ''}`; };
   const secs = Math.max(1, (fight.endTime - fight.startTime) / 1000);
   const deaths = [...side.deaths].sort((a, b) => a.timestamp - b.timestamp);
   const rel = (ts) => ts - fight.startTime;
@@ -50,8 +52,8 @@ export function summarizePull(side, lk, info) {
     // Output per second alive, so an early death doesn't read as low output (the Died columns show the deaths).
     // Someone battle-ressed and killed again is measured over the whole pull, since the time they lay dead isn't known.
     const outSecs = mine.length > 1 ? secs : alive / 1000;
-    return [pid, {
-      pid, spec: info(pid).spec, role: role(pid),
+    return [keyOf(pid), {
+      pid, key: keyOf(pid), spec: info(pid).spec, role: role(pid),
       dps: (d?.total || 0) / outSecs, hps: (h?.total || 0) / outSecs,
       active: activeMs ? Math.min(1, activeMs / alive) : null,
       diedAt: death ? rel(death.timestamp) : null,
@@ -77,11 +79,11 @@ export function summarizePull(side, lk, info) {
   for (const list of cooldowns.values()) for (const x of list) delete x.lastTick;
 
   return {
-    fight, pids, players,
+    fight, lk, pids, keys: pids.map(keyOf), players,
     kill: !!fight.kill,
     remaining: remainingPct(fight),
     duration: fight.endTime - fight.startTime,
-    deaths: deaths.map((d) => ({ pid: d.targetID, at: rel(d.timestamp), abilityId: d.killingAbilityGameID ?? d.abilityGameID ?? null })),
+    deaths: deaths.map((d) => ({ pid: d.targetID, key: keyOf(d.targetID), at: rel(d.timestamp), abilityId: d.killingAbilityGameID ?? d.abilityGameID ?? null })),
     firstDeath: deaths[0] ? rel(deaths[0].timestamp) : null,
     collapse: (() => { const t = collapseAt(fight, deaths, pids.length || fight.size || 0); return t == null ? null : rel(t); })(),
     mech,
@@ -96,16 +98,16 @@ export function summarizePull(side, lk, info) {
  * Two pulls of one boss, A the earlier, B the later. Returns the rows each section of the compare page shows.
  */
 export function comparePulls(a, b) {
-  const all = [...new Set([...a.pids, ...b.pids])];
+  const all = [...new Set([...a.keys, ...b.keys])];
   const output = (p) => (p ? (p.role === 'healer' ? p.hps : p.dps) : null);
 
-  const players = all.map((pid) => {
-    const pa = a.players.get(pid);
-    const pb = b.players.get(pid);
+  const players = all.map((key) => {
+    const pa = a.players.get(key);
+    const pb = b.players.get(key);
     const oa = output(pa);
     const ob = output(pb);
     return {
-      pid, a: pa || null, b: pb || null,
+      key, a: pa || null, b: pb || null,
       role: pb?.role || pa?.role || null,
       change: oa != null && ob != null && oa > 0 ? (ob - oa) / oa : null,
     };
@@ -126,9 +128,9 @@ export function comparePulls(a, b) {
   const cdNames = RAID_COOLDOWNS.filter((n) => a.cooldowns.has(n) || b.cooldowns.has(n));
   const cooldowns = cdNames.map((name) => ({ name, a: a.cooldowns.get(name) || [], b: b.cooldowns.get(name) || [] }));
 
-  const diedBoth = a.deaths.filter((d) => b.deaths.some((e) => e.pid === d.pid)).map((d) => d.pid);
-  const specChanges = all.filter((pid) => a.players.get(pid)?.spec && b.players.get(pid)?.spec && a.players.get(pid).spec !== b.players.get(pid).spec)
-    .map((pid) => ({ pid, from: a.players.get(pid).spec, to: b.players.get(pid).spec }));
+  const diedBoth = [...new Set(a.deaths.filter((d) => b.deaths.some((e) => e.key === d.key)).map((d) => d.key))];
+  const specChanges = all.filter((key) => a.players.get(key)?.spec && b.players.get(key)?.spec && a.players.get(key).spec !== b.players.get(key).spec)
+    .map((key) => ({ key, pid: b.players.get(key).pid, from: a.players.get(key).spec, to: b.players.get(key).spec }));
 
   const highlights = [];
   const fmtS = (ms) => `${Math.floor(ms / 60000)}:${String(Math.round(ms / 1000) % 60).padStart(2, '0')}`;
@@ -145,8 +147,9 @@ export function comparePulls(a, b) {
 
   return {
     a, b, players, avoid, interrupts, cooldowns, highlights, diedBoth, specChanges,
-    swappedIn: b.pids.filter((pid) => !a.pids.includes(pid)),
-    swappedOut: a.pids.filter((pid) => !b.pids.includes(pid)),
+    // As actor ids in their own pull, for showing names.
+    swappedIn: b.pids.filter((pid, i) => !a.keys.includes(b.keys[i])),
+    swappedOut: a.pids.filter((pid, i) => !b.keys.includes(a.keys[i])),
   };
 }
 

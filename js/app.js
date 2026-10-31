@@ -2,7 +2,7 @@ import { CONFIG } from './config.js';
 import { store } from './store.js';
 import { getClientId, setClientId, getToken, login, logout, handleRedirect, redirectUri } from './auth.js';
 import {
-  AuthError, isAllowedHost, parseLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
+  AuthError, isAllowedHost, parseLink, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
   fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, fetchNamedCasts, clearReportCache,
@@ -38,12 +38,13 @@ function route() {
   const host = (p.get('h') || '').toLowerCase();
   const guild = p.get('g') ? { id: Number(p.get('g')) }
     : p.get('gn') ? { name: p.get('gn'), server: p.get('gs') || '', region: p.get('gr') || '' } : null;
-  return { code: p.get('r'), guild, host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p'), compare: num('c') };
+  return { code: p.get('r'), guild, host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p'), compare: num('c'), code2: /^[A-Za-z0-9]{1,40}$/.test(p.get('r2') || '') ? p.get('r2') : null };
 }
 
-function href({ code, host, fight, player, compare }) {
+function href({ code, host, fight, player, compare, code2 }) {
   const p = new URLSearchParams({ r: code, h: host });
   if (fight != null) p.set('f', fight);
+  if (code2) p.set('r2', code2);
   if (compare != null) p.set('c', compare);
   if (player != null) p.set('p', player);
   return `#${p}`;
@@ -59,7 +60,7 @@ function guildHref({ host, guild }) {
 const linkHref = (item) => (item.kind === 'guild' ? guildHref(item) : href(item));
 
 function playerLink(lk, id, r, fightId) {
-  return `<a class="player-link" href="${href({ ...r, fight: fightId, player: id, compare: null })}">${playerTag(lk, id)}</a>`;
+  return `<a class="player-link" href="${href({ ...r, fight: fightId, player: id, compare: null, code2: null })}">${playerTag(lk, id)}</a>`;
 }
 
 function playerTag(lk, id) {
@@ -270,7 +271,7 @@ async function loadReport(r) {
 function reportHeader(r, report, crumbs = []) {
   const date = new Date(report.startTime).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   const guild = report.guild ? `${esc(report.guild.name)}${report.guild.server ? ` · ${esc(report.guild.server.name)}` : ''}` : esc(report.owner?.name || '');
-  const trail = [{ label: esc(report.title), href: crumbs.length ? href({ ...r, fight: null, player: null, compare: null }) : null }, ...crumbs];
+  const trail = [{ label: esc(report.title), href: crumbs.length ? href({ ...r, fight: null, player: null, compare: null, code2: null }) : null }, ...crumbs];
   return `<section class="report-head">
     <div class="report-title">
       <nav class="crumbs" aria-label="Breadcrumb">${trail.map((c, i) => (c.href && i < trail.length - 1
@@ -667,11 +668,16 @@ async function renderFight(r) {
     ${idx < pulls.length - 1 ? `<a class="button secondary" href="${href({ ...r, fight: pulls[idx + 1].id })}">Pull ${idx + 2} →</a>` : ''}
   </nav>`;
   const suggested = defaultComparison(pulls, fight);
-  const compareHtml = suggested ? `<div class="compare-pick">
-      <a class="button secondary" href="${href({ ...r, compare: suggested.id })}">Compare with ${esc(pullLabel(pulls, suggested))} →</a>
+  const compareHtml = `<div class="compare-pick">
+      ${suggested ? `<a class="button secondary" href="${href({ ...r, compare: suggested.id })}">Compare with ${esc(pullLabel(pulls, suggested))} →</a>` : ''}
       ${pulls.length > 2 ? `<select id="compare-pull" aria-label="Compare with another pull"><option value="">Or another pull…</option>
         ${pulls.filter((f) => f.id !== fight.id).map((f) => `<option value="${f.id}">${esc(pullLabel(pulls, f))}</option>`).join('')}</select>` : ''}
-    </div>` : '';
+      <form id="compare-log" class="compare-log">
+        <input type="text" name="link" autocomplete="off" placeholder="Or paste another log's link to compare with its ${esc(fight.name)} pulls" aria-label="Another log to compare with">
+        <button type="submit" class="secondary">Compare</button>
+        <span class="form-error no" hidden></span>
+      </form>
+    </div>`;
 
   const decisive = fa.analyses.filter((a) => !a.minor);
   const late = fa.analyses.filter((a) => a.minor);
@@ -716,6 +722,21 @@ async function renderFight(r) {
   $('#compare-pull')?.addEventListener('change', (e) => {
     if (e.target.value) location.hash = href({ ...r, compare: Number(e.target.value) });
   });
+  $('#compare-log')?.addEventListener('submit', (e) => {
+    e.preventDefault();
+    const err = e.target.querySelector('.form-error');
+    const fail = (msg) => { err.textContent = msg; err.hidden = false; };
+    const link = parseReportLink(e.target.link.value);
+    if (!link) return fail('That doesn\'t look like a Warcraft Logs report link.');
+    if (link.host !== r.host) return fail('That log is on a different Warcraft Logs site.');
+    if (link.code === r.code) {
+      if (link.fight != null && link.fight !== fight.id) location.hash = href({ ...r, compare: link.fight });
+      else fail('That\'s this log. Pick a pull from the menu instead.');
+      return;
+    }
+    // A link to a specific pull (?fight=N) compares with that pull; otherwise the compare page picks one.
+    location.hash = href({ ...r, code2: link.code, compare: link.fight });
+  });
 }
 
 // "Pull 3 · wipe 9.3%" / "Pull 4 · kill", numbered among this boss's pulls in the log.
@@ -733,37 +754,65 @@ function changeCell(change) {
   return `<td class="num ${p <= -10 ? 'no' : p >= 10 ? 'yes' : 'muted'}">${signed(p)}%</td>`;
 }
 
+// Two pulls of one boss. r.fight is a pull in r.code; r.compare is a pull in r.code2 when comparing across logs
+// (this week against last), else in the same log. Across logs without r.compare, the other log's kill (or best
+// wipe) is picked. The earlier pull is always on the left.
 async function renderCompare(r) {
   setLoading('Loading report…');
-  const { report, lk, deaths } = await loadReport(r);
+  const home = await loadReport(r);
+  const { report, lk } = home;
   remember({ kind: 'report', code: r.code, host: r.host, title: report.title });
-  const picked = [r.fight, r.compare].map((id) => (report.fights || []).find((f) => f.id === id));
-  if (picked.some((f) => !f)) throw new Error('One of those pulls isn\'t a boss pull in this report.');
-  if (picked[0].encounterID !== picked[1].encounterID) throw new Error('Those pulls are on different bosses, so there\'s nothing to compare.');
-  const [fa, fb] = [...picked].sort((x, y) => x.startTime - y.startTime);
-  const pulls = report.fights.filter((f) => f.encounterID === fa.encounterID);
+  const fight = (report.fights || []).find((f) => f.id === r.fight);
+  if (!fight) throw new Error('That pull isn\'t a boss pull in this report.');
+  const crossLog = !!r.code2 && r.code2 !== r.code;
+  const otherR = crossLog ? { ...r, code: r.code2, code2: null } : r;
+  if (crossLog) setLoading('Loading the other report…');
+  const other = crossLog ? await loadReport(otherR) : home;
+  const otherPulls = (other.report.fights || []).filter((f) => f.encounterID === fight.encounterID);
+  if (!otherPulls.length) throw new Error(`That log has no ${fight.name} pulls to compare with.`);
+  const target = r.compare != null ? (other.report.fights || []).find((f) => f.id === r.compare)
+    : otherPulls.find((f) => f.kill) || otherPulls.reduce((best, f) => ((remainingPct(f) ?? 100) < (remainingPct(best) ?? 100) ? f : best));
+  if (!target) throw new Error('That pull isn\'t a boss pull in the other report.');
+  if (target.encounterID !== fight.encounterID) throw new Error('Those pulls are on different bosses, so there\'s nothing to compare.');
+  if (!crossLog && target.id === fight.id) throw new Error('That\'s the same pull twice.');
+
+  const [sa, sb] = [{ ...home, r: { ...r, code2: null }, fight }, { ...other, r: { ...otherR, code2: null }, fight: target }]
+    .sort((x, y) => (x.report.startTime + x.fight.startTime) - (y.report.startTime + y.fight.startTime));
+  const [fa, fb] = [sa.fight, sb.fight];
 
   setLoading(`Comparing ${fa.name} pulls…`);
   const tracked = trackedNames([fa.name]);
-  const load = (f) => Promise.all([
-    fetchFightDetail(r.host, r.code, f),
-    mechanicsFor(f.name) ? fetchMechanicEvents(r.host, r.code, [f.id], tracked) : null,
-    fetchEnemyDebuffs(r.host, r.code, f),
-    fetchRaidBuffEvents(r.host, r.code, [f.id]),
+  const load = (s) => Promise.all([
+    fetchFightDetail(s.r.host, s.r.code, s.fight),
+    mechanicsFor(s.fight.name) ? fetchMechanicEvents(s.r.host, s.r.code, [s.fight.id], tracked) : null,
+    fetchEnemyDebuffs(s.r.host, s.r.code, s.fight),
+    fetchRaidBuffEvents(s.r.host, s.r.code, [s.fight.id]),
+    fetchNamedCasts(s.r.host, s.r.code, [s.fight.id], RAID_COOLDOWNS),
   ]);
-  const [da, db, cdCasts] = await Promise.all([load(fa), load(fb), fetchNamedCasts(r.host, r.code, [fa.id, fb.id], RAID_COOLDOWNS)]);
-  const side = (f, [detail, mech, enemyDebuffs, buffEvents]) => summarizePull({
-    fight: f, deaths: deaths.filter((d) => d.fight === f.id), detail, mech, enemyDebuffs, buffEvents, cdCasts,
-  }, lk, specInfo(lk, [detail.damage, detail.healing]));
-  const c = comparePulls(side(fa, da), side(fb, db));
-  const A = esc(pullLabel(pulls, fa));
-  const B = esc(pullLabel(pulls, fb));
-  const pullLink = (f, label) => `<a href="${href({ ...r, fight: f.id, compare: null })}">${label}</a>`;
+  const [da, db] = await Promise.all([load(sa), load(sb)]);
+  const side = (s, [detail, mech, enemyDebuffs, buffEvents, cdCasts]) => ({
+    ...summarizePull({ fight: s.fight, deaths: s.deaths.filter((d) => d.fight === s.fight.id), detail, mech, enemyDebuffs, buffEvents, cdCasts },
+      s.lk, specInfo(s.lk, [detail.damage, detail.healing])),
+    r: s.r,
+  });
+  const c = comparePulls(side(sa, da), side(sb, db));
+  const label = (s) => {
+    const pulls = s.report.fights.filter((f) => f.encounterID === s.fight.encounterID);
+    return esc(`${crossLog ? `${fmtDay(s.report.startTime + s.fight.startTime)} · ` : ''}${pullLabel(pulls, s.fight)}`);
+  };
+  const A = label(sa);
+  const B = label(sb);
+  const pullLinkOf = (s, text) => `<a href="${href({ ...s.r, fight: s.fight.id, compare: null })}">${text}</a>`;
+  const pullLink = (f, text) => pullLinkOf(f === fa ? c.a : c.b, text);
   const headRow = (first) => `<thead><tr><th>${first}</th><th>${pullLink(fa, A)}</th><th>${pullLink(fb, B)}</th></tr></thead>`;
+  // Across logs, any of the other log's pulls of this boss can be picked instead.
+  const otherPicker = crossLog && otherPulls.length > 1 ? `<label class="select-label">Pull from ${esc(other.report.title)}:
+      <select id="compare-other">${otherPulls.map((f) => `<option value="${f.id}"${f.id === target.id ? ' selected' : ''}>${esc(pullLabel(otherPulls, f))}</option>`).join('')}</select></label>` : '';
   const t = (ms) => (ms == null ? '<span class="muted">–</span>' : fmtTime(ms));
   const hitsOf = (s) => (s.mech ? s.mech.avoid.reduce((n, x) => n + x.hits, 0) : null);
 
   const outcome = `<section class="card"><h2>${esc(fa.name)}: ${A} vs ${B}</h2>
+    ${otherPicker}
     ${c.highlights.length ? `<ul class="issues">${c.highlights.map((h) => `<li>${esc(h)}</li>`).join('')}</ul>` : ''}
     <table class="table compare">${headRow('')}<tbody>
       <tr><td>Result</td>${[c.a, c.b].map((s) => `<td><span class="badge ${s.kill ? 'kill' : 'wipe'}">${s.kill ? 'Kill' : `Wipe · ${fmtPct(s.remaining)}`}</span></td>`).join('')}</tr>
@@ -778,23 +827,23 @@ async function renderCompare(r) {
 
   const deathList = (s) => (s.deaths.length ? `<table class="table"><tbody>${s.deaths.map((d) => `<tr>
       <td class="num muted">${fmtTime(d.at)}</td>
-      <td>${playerLink(lk, d.pid, r, s.fight.id)}${c.diedBoth.includes(d.pid) ? ' <span class="tag" title="Died in both pulls">both</span>' : ''}</td>
-      <td class="muted">${d.abilityId ? spellLink(lk, d.abilityId, lk.abilityName(d.abilityId)) : ''}</td></tr>`).join('')}</tbody></table>`
+      <td>${playerLink(s.lk, d.pid, s.r, s.fight.id)}${c.diedBoth.includes(d.key) ? ' <span class="tag" title="Died in both pulls">both</span>' : ''}</td>
+      <td class="muted">${d.abilityId ? spellLink(s.lk, d.abilityId, s.lk.abilityName(d.abilityId)) : ''}</td></tr>`).join('')}</tbody></table>`
     : '<p class="muted">Nobody died.</p>');
   const deathsHtml = `<section class="grid2">
     <article class="card"><h2>Deaths · ${pullLink(fa, A)}</h2>${deathList(c.a)}</article>
     <article class="card"><h2>Deaths · ${pullLink(fb, B)}</h2>${deathList(c.b)}</article>
   </section>`;
 
-  const avoidRows = c.avoid.map((x) => `<tr><td>${spellLink(lk, x.a?.abilityId ?? x.b?.abilityId, x.name)}</td>
+  const avoidRows = c.avoid.map((x) => `<tr><td>${spellLink(x.a ? c.a.lk : c.b.lk, x.a?.abilityId ?? x.b?.abilityId, x.name)}</td>
     <td class="num">${x.a?.hits ?? 0}</td><td class="num">${x.b?.hits ?? 0}</td></tr>`).join('');
-  const intRows = c.interrupts.map((x) => `<tr><td>${spellLink(lk, x.a?.abilityId ?? x.b?.abilityId, x.name)}</td>
+  const intRows = c.interrupts.map((x) => `<tr><td>${spellLink(x.a ? c.a.lk : c.b.lk, x.a?.abilityId ?? x.b?.abilityId, x.name)}</td>
     <td class="num">${x.a ? `${x.a.wentOff} went off · ${x.a.interrupted} stopped` : '–'}</td>
     <td class="num">${x.b ? `${x.b.wentOff} went off · ${x.b.interrupted} stopped` : '–'}</td></tr>`).join('');
   // After the first lust the raid is sated for 10 minutes, so another cast in that time only reaches pets.
   const satedNote = (name, list, x) => (name === 'Bloodlust' && list[0] !== x && x.at - list[0].at < 600_000 ? ' <span class="muted">(pets only: the raid is sated)</span>' : '');
-  const cdTimes = (name, list) => (list.length ? list.map((x) => `${fmtTime(x.at)} <span class="muted">${esc(lk.actor(x.pid)?.name || '')}</span>${satedNote(name, list, x)}`).join('<br>') : '<span class="no">not used</span>');
-  const cdRows = c.cooldowns.map((x) => `<tr><td>${esc(x.name)}</td><td>${cdTimes(x.name, x.a)}</td><td>${cdTimes(x.name, x.b)}</td></tr>`).join('');
+  const cdTimes = (name, list, s) => (list.length ? list.map((x) => `${fmtTime(x.at)} <span class="muted">${esc(s.lk.actor(x.pid)?.name || '')}</span>${satedNote(name, list, x)}`).join('<br>') : '<span class="no">not used</span>');
+  const cdRows = c.cooldowns.map((x) => `<tr><td>${esc(x.name)}</td><td>${cdTimes(x.name, x.a, c.a)}</td><td>${cdTimes(x.name, x.b, c.b)}</td></tr>`).join('');
   const mechanicsHtml = `
     ${avoidRows ? `<section class="card"><h2>Avoidable hits</h2><table class="table compare">${headRow('Ability')}<tbody>${avoidRows}</tbody></table></section>` : ''}
     ${intRows ? `<section class="card"><h2>Interrupts</h2><table class="table compare">${headRow('Enemy cast')}<tbody>${intRows}</tbody></table></section>` : ''}
@@ -806,7 +855,7 @@ async function renderCompare(r) {
 
   const out = (p) => (p ? fmtNum(p.role === 'healer' ? p.hps : p.dps) : '<span class="muted">–</span>');
   const playerRows = c.players.map((p) => `<tr>
-    <td>${playerTag(lk, p.pid)} <span class="muted">${esc(p.b?.spec || p.a?.spec || '')}</span></td>
+    <td>${p.b ? playerTag(c.b.lk, p.b.pid) : playerTag(c.a.lk, p.a.pid)} <span class="muted">${esc(p.b?.spec || p.a?.spec || '')}</span></td>
     <td class="num">${out(p.a)}</td><td class="num">${out(p.b)}</td>${changeCell(p.change)}
     <td class="num">${p.a?.active != null ? `${Math.round(p.a.active * 100)}%` : '–'} → ${p.b?.active != null ? `${Math.round(p.b.active * 100)}%` : '–'}</td>
     <td class="num">${p.a ? (p.a.diedAt != null ? `<span class="no">${fmtTime(p.a.diedAt)}</span>` : '') : '<span class="muted">out</span>'}</td>
@@ -830,12 +879,12 @@ async function renderCompare(r) {
     const cell = (y) => (y ? `<span class="${y.uptime >= y.target ? 'yes' : 'no'}">${Math.round(y.uptime * 100)}%</span>` : '–');
     return coverageRow(x.label, cell(c.a.debuffs?.find((y) => y.key === x.key)), cell(c.b.debuffs?.find((y) => y.key === x.key)));
   }) : []).join('');
-  const who = (pids) => pids.map((id) => playerTag(lk, id)).join(', ');
+  const who = (pids, s) => pids.map((id) => playerTag(s.lk, id)).join(', ');
   const setupHtml = `<section class="card"><h2>Setup</h2>
     <ul class="issues">
       <li>${c.swappedIn.length || c.swappedOut.length
-    ? `${c.swappedOut.length ? `Out: ${who(c.swappedOut)}. ` : ''}${c.swappedIn.length ? `In: ${who(c.swappedIn)}.` : ''}` : 'Same players in both pulls.'}</li>
-      ${c.specChanges.map((s) => `<li>${playerTag(lk, s.pid)} changed spec: ${esc(s.from)} → ${esc(s.to)}.</li>`).join('')}
+    ? `${c.swappedOut.length ? `Out: ${who(c.swappedOut, c.a)}. ` : ''}${c.swappedIn.length ? `In: ${who(c.swappedIn, c.b)}.` : ''}` : 'Same players in both pulls.'}</li>
+      ${c.specChanges.map((s) => `<li>${playerTag(c.b.lk, s.pid)} changed spec: ${esc(s.from)} → ${esc(s.to)}.</li>`).join('')}
       <li>No potion at all: ${c.a.noPotions.length} → ${c.b.noPotions.length}.</li>
     </ul>
     ${buffRows || debuffRows ? `<table class="table compare">${headRow('Buff or debuff')}<tbody>${buffRows}${debuffRows}</tbody></table>
@@ -843,16 +892,17 @@ async function renderCompare(r) {
   </section>`;
 
   view.innerHTML = `
-    ${reportHeader(r, report, [{ label: `${esc(fa.name)} · compare` }])}
+    ${reportHeader(r, report, [{ label: `${esc(fa.name)} · ${crossLog ? `compare with ${esc(fmtDay(other.report.startTime))}` : 'compare'}` }])}
     ${tabbed('fl.tab.compare', [
     { id: 'overview', label: 'Overview', html: `${outcome}${deathsHtml}` },
     { id: 'mechanics', label: 'Mechanics & cooldowns', html: mechanicsHtml },
     { id: 'players', label: 'Players', html: playersHtml },
     { id: 'setup', label: 'Setup', html: setupHtml },
   ])}
-    ${rawBlock('compare', { a: { ...c.a, players: [...c.a.players.values()], cooldowns: [...c.a.cooldowns] }, b: { ...c.b, players: [...c.b.players.values()], cooldowns: [...c.b.cooldowns] } })}`;
+    ${rawBlock('compare', { a: { ...c.a, lk: undefined, players: [...c.a.players.values()], cooldowns: [...c.a.cooldowns] }, b: { ...c.b, lk: undefined, players: [...c.b.players.values()], cooldowns: [...c.b.cooldowns] } })}`;
   bindTabs();
   bindRefresh(r);
+  $('#compare-other')?.addEventListener('change', (e) => { location.hash = href({ ...r, compare: Number(e.target.value) }); });
 }
 
 const ROLE_ORDER = { tank: 0, healer: 1, dps: 2 };
@@ -1423,7 +1473,7 @@ async function render() {
     if (!r.code && !r.guild) { renderHome(); return; }
     if (!getToken()) throw new AuthError('Connect your Warcraft Logs account to load reports.');
     if (r.guild) await renderGuild(r);
-    else if (r.fight != null && r.compare != null) await renderCompare(r);
+    else if (r.fight != null && (r.compare != null || r.code2)) await renderCompare(r);
     else if (r.fight != null && r.player != null) await renderPlayer(r);
     else if (r.player != null) await renderNightPlayer(r);
     else if (r.fight != null) await renderFight(r);
