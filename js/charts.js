@@ -109,3 +109,43 @@ export function lineChart(series, opts) {
     <figcaption class="pc-legend">${series.map((s, i) => `<span class="lc-key lc-key-${i ? 'b' : 'a'}"></span>${esc(s.label)}`).join(' ')}</figcaption>
   </figure>`;
 }
+
+/**
+ * One value per night (oldest first) as a line with markers: a single series, so no legend; the card title names it.
+ * @param points  [{ label (x-axis text), value (0-yMax, or null for a gap), title (tooltip), href? }]
+ * @param opts    { label (accessible name), yMax = 100, yFmt }
+ */
+export function nightsChart(points, opts) {
+  const vals = points.filter((p) => p.value != null);
+  if (vals.length < 2) return '';
+  const W = 760;
+  const H = 150;
+  const P = { top: 10, right: 16, bottom: 22, left: 40 };
+  const yMax = opts.yMax ?? 100;
+  const fmt = opts.yFmt || ((v) => String(Math.round(v)));
+  const plotW = W - P.left - P.right;
+  const plotH = H - P.top - P.bottom;
+  const x = (i) => P.left + (points.length === 1 ? plotW / 2 : (i / (points.length - 1)) * plotW);
+  const y = (v) => P.top + (1 - Math.min(1, Math.max(0, v / yMax))) * plotH;
+
+  const grid = [0, yMax / 2, yMax].map((v) => `<line class="pc-grid" x1="${P.left}" x2="${P.left + plotW}" y1="${y(v)}" y2="${y(v)}"/>
+    <text class="pc-axis" x="${P.left - 6}" y="${y(v) + 3.5}" text-anchor="end">${esc(fmt(v))}</text>`).join('');
+  const labels = points.map((p, i) => `<text class="pc-axis" x="${x(i).toFixed(1)}" y="${H - 6}" text-anchor="middle">${esc(p.label)}</text>`).join('');
+  // Gaps (nights with no value) break the line rather than joining across them.
+  let d = '';
+  let pen = false;
+  points.forEach((p, i) => {
+    if (p.value == null) { pen = false; return; }
+    d += `${pen ? 'L' : 'M'}${x(i).toFixed(1)},${y(p.value).toFixed(1)} `;
+    pen = true;
+  });
+  const marks = points.map((p, i) => {
+    if (p.value == null) return '';
+    const body = `<title>${esc(p.title)}</title><circle class="pc-hit" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="10"/>
+      <circle class="pc-wipe" cx="${x(i).toFixed(1)}" cy="${y(p.value).toFixed(1)}" r="4"/>`;
+    return p.href ? `<a href="${esc(p.href)}">${body}</a>` : `<g>${body}</g>`;
+  }).join('');
+  return `<figure class="line-chart">
+    <svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(opts.label)}">${grid}${labels}<path class="pc-line" d="${d.trim()}"/>${marks}</svg>
+  </figure>`;
+}

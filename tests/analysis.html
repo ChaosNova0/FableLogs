@@ -645,6 +645,38 @@ const lc = lineChart([{ label: 'Pull 2', points: [[0, 10], [60000, 20]] }, { lab
 check('line chart: two lines, legend, escaped hover', (lc.match(/class="lc-line/g) || []).length === 2 && lc.includes('lc-key-b') && lc.includes('Pull 3 &lt;kill&gt;') && lc.includes('<title>'));
 check('line chart: nothing to draw', lineChart([{ label: 'a', points: [] }, { label: 'b', points: [[0, 1]] }], { label: 'x' }) === '');
 
+// ---------- player trend ----------
+const { nightStats, playerTrend } = await import('../js/trend.js');
+const tLk = buildLookups({ masterData: { actors: [{ id: 5, name: 'Shank', type: 'Player', subType: 'Rogue' }, { id: 6, name: 'Other', type: 'Player', subType: 'Mage' }], abilities: [] } });
+const tReport = (code, start, parses, deathsIn) => {
+  const fights = [
+    { id: 1, encounterID: 10, name: 'Boss A', kill: false, friendlyPlayers: [5, 6], startTime: 0, endTime: 1 },
+    { id: 2, encounterID: 10, name: 'Boss A', kill: true, friendlyPlayers: [5, 6], startTime: 2, endTime: 3 },
+    { id: 3, encounterID: 11, name: 'Boss B', kill: true, friendlyPlayers: [5, 6], startTime: 4, endTime: 5 },
+  ];
+  const night = nightStats({
+    report: { code, title: code, startTime: start, zone: { name: 'Raid' }, fights }, lk: tLk, pid: 5,
+    deaths: deathsIn.map((f) => ({ type: 'death', targetID: 5, fight: f })),
+    rankings: { data: [2, 3].map((id, i) => ({ fightID: id, roles: { dps: { characters: [{ name: 'Shank', rankPercent: parses[i], amount: 200000 + i }, { name: 'Other', rankPercent: 1 }] } } })) },
+    mech: null,
+  });
+  return night;
+};
+const tn1 = tReport('n1', 1000, [40, 50], [1, 1]);
+check('trend night: pulls, kills, deaths, parses', tn1.pulls === 3 && tn1.kills === 2 && tn1.deaths === 2 && tn1.pullsDied === 1 && tn1.avgParse === 45 && tn1.bestParse === 50
+  && tn1.bosses[0].amount === 200000 && tn1.role === 'dps' && tn1.avoid === null, JSON.stringify(tn1));
+const trendRes = playerTrend([tReport('n4', 4000, [80, 90], []), tn1, tReport('n2', 2000, [50, 40], [3]), tReport('n3', 3000, [70, 80], [])]);
+check('trend: oldest first', trendRes.nights.map((n) => n.code).join() === 'n1,n2,n3,n4');
+check('trend: halves compared', trendRes.summary.olderParse === 45 && trendRes.summary.newerParse === 80 && trendRes.highlights.some((h) => h.level === 'good' && h.text.startsWith('Average parse up from 45 to 80')), JSON.stringify(trendRes.highlights));
+check('trend: deaths per pull trend', Math.abs(trendRes.summary.olderDeaths - 0.5) < 1e-9 && trendRes.summary.newerDeaths === 0 && trendRes.highlights.some((h) => h.text.startsWith('Dying on fewer pulls')));
+check('trend: boss by night', trendRes.bosses.length === 2 && trendRes.bosses[0].byNight.get('n4').parse === 80);
+const drop = playerTrend([tReport('a', 1, [95, 50], []), tReport('b', 2, [60, 50], [])]);
+check('trend: a boss well below their best', drop.highlights.some((h) => h.text.startsWith('Boss A: latest parse 60, well below their best of 95')), JSON.stringify(drop.highlights));
+const { nightsChart } = await import('../js/charts.js');
+const nc = nightsChart([{ label: 'a', value: 40, title: 'x' }, { label: 'b', value: null, title: 'y' }, { label: 'c', value: 60, title: 'z<', href: '#n' }], { label: 'c' });
+check('nights chart: gap breaks the line, escaping', (nc.match(/ M/g) || []).length + (nc.match(/d="M/g) || []).length === 2 && nc.includes('z&lt;') && nc.includes('href="#n"'), nc.slice(0, 300));
+check('nights chart: needs two values', nightsChart([{ label: 'a', value: 1, title: '' }, { label: 'b', value: null, title: '' }], { label: 'c' }) === '');
+
 out.innerHTML += `\n${pass} passed, ${fail} failed\n`;
 document.title = fail ? `FAIL ${fail}` : `PASS ${pass}`;
 </script>

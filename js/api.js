@@ -554,6 +554,26 @@ export async function fetchPlayerAuras(host, code, fight, pid, debuffNames = [])
   }
 }
 
+// Whether at least `share` of this hour's API points have been spent, as of the last request. Pages that can load
+// more or less (guild history, player trends) stop there so the rest of the site still works.
+export function overBudget(share) {
+  return !!lastRate && lastRate.pointsSpentThisHour >= lastRate.limitPerHour * share;
+}
+
+// Parse percentiles and DPS/HPS for everyone in several fights (a night's kills) in one request. Null on failure.
+export async function fetchReportRankings(host, code, fightIDs) {
+  if (!fightIDs.length) return null;
+  try {
+    const { data } = await gql(host, `query ($code: String!, $f: [Int]!) { ${RATE_FIELDS} reportData { report(code: $code) {
+      rankings(fightIDs: $f)
+    } } }`, { code, f: fightIDs }, { cacheKey: `${code}:rankings:${fightIDs.join(',')}` });
+    return data?.reportData?.report?.rankings ?? null;
+  } catch (err) {
+    if (err instanceof AuthError || err instanceof RateLimitError) throw err;
+    return null;
+  }
+}
+
 // Parse percentiles for everyone in the fight. Returns null rather than failing the page.
 export async function fetchRankings(host, code, fight) {
   try {

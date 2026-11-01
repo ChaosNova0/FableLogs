@@ -122,7 +122,9 @@ const casts = (f, pid) => {
 const interrupts = FIGHTS.flatMap((f) => [7, 7, 7, 10, 1].map((pid, i) => ({ timestamp: f.startTime + 20_000 * (i + 1), type: 'interrupt', sourceID: pid, fight: f.id, abilityGameID: 1766, extraAbilityGameID: 116835 })));
 const dispels = FIGHTS.flatMap((f) => [3, 4, 3].map((pid, i) => ({ timestamp: f.startTime + 30_000 * (i + 1), type: 'dispel', sourceID: pid, fight: f.id, abilityGameID: 527, extraAbilityGameID: 117558 })));
 
-const rankings = (f) => ({ data: [{ fightID: f.id, roles: { dps: { characters: PLAYERS.map(([id, name]) => ({ name, rankPercent: (id * 37) % 100 })) } } }] });
+// Parses vary a little by pull and by code (night), so the player trend page has something to show.
+const rankings = (f, code = '') => ({ data: [{ fightID: f.id, roles: { dps: { characters: PLAYERS.map(([id, name]) => ({
+  name, rankPercent: (id * 37 + f.id * 11 + code.length * 3 + (code.charCodeAt(code.length - 3) || 0) * 7) % 100, amount: 150_000 + id * 9000 + f.id * 2000 })) } } }] });
 
 const REPORT = {
   code: 'PreviewReport0001', title: 'Mogu\'shan Vaults — Thursday', startTime: Date.UTC(2026, 9, 29, 9, 30), endTime: Date.UTC(2026, 9, 29, 12, 0),
@@ -249,7 +251,11 @@ function respond(query, variables) {
     return { data: { reportData: { reports: { data, has_more_pages: page * variables.limit < GUILD_REPORTS.length } } } };
   }
   if (query.includes('guildData')) return { data: { guildData: { guild: GUILD } } };
-  if (query.includes('masterData')) return { data: { ...rate, reportData: { report: REPORT } } };
+  if (query.includes('masterData')) {
+    // Every log is the same night's pulls, but under its own code, title and date so pages across logs can tell them apart.
+    const g = variables.code !== REPORT.code && GUILD_REPORTS.find((x) => x.code === variables.code);
+    return { data: { ...rate, reportData: { report: g ? { ...REPORT, code: g.code, title: g.title, startTime: g.startTime } : REPORT } } };
+  }
   if (query.includes('gameZone')) return wrap({ fights: FIGHTS.map((x) => ({ id: x.id, gameZone: ZONE_OF[x.encounterID] })) });
   if (/^\{\s*rateLimitData/.test(query.trim())) return { data: rate };
   if (query.includes('dataType: Deaths')) return wrap({ events: { data: deathEvents, nextPageTimestamp: null } });
@@ -271,7 +277,10 @@ function respond(query, variables) {
       data: Array.from({ length: secs }, (_, i) => Math.round(100e6 * (1 - (1 - endPct / 100) * Math.pow(i / secs, 0.9)))) }];
     return wrap({ damage: { data: { series } }, health: { data: { series: health } } });
   }
-  if (query.includes('rankings(')) return wrap({ rankings: rankings(fight) });
+  if (query.includes('rankings(')) {
+    const fights = (variables.f || []).map((id) => FIGHTS.find((x) => x.id === id)).filter(Boolean);
+    return wrap({ rankings: { data: fights.flatMap((f) => rankings(f, variables.code).data) } });
+  }
   if (query.includes('buffs: table(dataType: Buffs')) {
     // One player's aura uptimes (ms): Frostbyte as a Nether Tempest / Invocation frost mage, Shank as combat.
     const span = fight.endTime - fight.startTime;

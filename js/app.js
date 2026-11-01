@@ -2,14 +2,15 @@ import { CONFIG } from './config.js';
 import { store } from './store.js';
 import { getClientId, setClientId, getToken, login, logout, handleRedirect, redirectUri } from './auth.js';
 import {
-  AuthError, isAllowedHost, parseLink, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
+  AuthError, RateLimitError, isAllowedHost, parseLink, parseReportLink, onRateLimit, fetchRateLimit, fetchReport, fetchDeaths,
   fetchFightDetail, fetchDeathWindows, fetchPlayerCasts, fetchRankings, fetchReportTotals, fetchReportPrep, fetchFightZones, fetchFightTables,
   fetchGuild, fetchGuildReportList, fetchReportFights, fetchGuildAttendance, fetchGuildMembers, fetchZoneInfo, fetchZoneExpansions, fetchTeamSpecs, bossImage, zoneImage, specIcon, guildCachePrefix,
-  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, fetchNamedCasts, fetchFightGraphs, clearReportCache,
+  fetchMechanicEvents, fetchEnemyDebuffs, fetchPlayerAuras, fetchRaidBuffEvents, fetchNamedCasts, fetchFightGraphs, fetchReportRankings, overBudget, clearReportCache,
 } from './api.js';
 import { mechanicsFor, trackedNames, analyzeMechanics, nightMechanics } from './mechanics.js';
 import { buffCoverage, debuffCoverage, nightBuffCoverage } from './buffs.js';
-import { progressChart, lineChart } from './charts.js';
+import { progressChart, lineChart, nightsChart } from './charts.js';
+import { nightStats, playerTrend } from './trend.js';
 import { raidDps, bossHealth } from './timeline.js';
 import { RAID_COOLDOWNS, summarizePull, comparePulls, defaultComparison } from './compare.js';
 import { SPEC_MODULES } from './specs/index.js';
@@ -43,7 +44,7 @@ function route() {
   const host = (p.get('h') || '').toLowerCase();
   const guild = p.get('g') ? { id: Number(p.get('g')) }
     : p.get('gn') ? { name: p.get('gn'), server: p.get('gs') || '', region: p.get('gr') || '' } : null;
-  return { code: p.get('r'), guild, host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p'), compare: num('c'), code2: /^[A-Za-z0-9]{1,40}$/.test(p.get('r2') || '') ? p.get('r2') : null };
+  return { code: p.get('r'), guild, host: isAllowedHost(host) ? host : CONFIG.defaultHost, fight: num('f'), player: num('p'), compare: num('c'), playerName: p.get('pn') || null, code2: /^[A-Za-z0-9]{1,40}$/.test(p.get('r2') || '') ? p.get('r2') : null };
 }
 
 function href({ code, host, fight, player, compare, code2 }) {
@@ -55,10 +56,11 @@ function href({ code, host, fight, player, compare, code2 }) {
   return `#${p}`;
 }
 
-function guildHref({ host, guild }) {
+function guildHref({ host, guild, playerName }) {
   const p = guild.id != null
     ? new URLSearchParams({ g: guild.id, h: host })
     : new URLSearchParams({ gn: guild.name, gs: guild.server, gr: guild.region, h: host });
+  if (playerName) p.set('pn', playerName);
   return `#${p}`;
 }
 
@@ -1195,11 +1197,15 @@ const GUILD_LIMITS = [10, 25, 50];
 const LATEST_LOGS = 25;
 const HISTORY_BUDGET = 0.6;
 
-function guildHeader(r, guild) {
+// playerName: on a player's trend page, the guild links back and the player is the last crumb.
+function guildHeader(r, guild, playerName) {
   const where = [guild.server?.name, guild.server?.region?.slug?.toUpperCase(), guild.faction?.name].filter(Boolean).map(esc).join(' · ');
+  const crumbs = playerName
+    ? `<a href="${guildHref({ host: r.host, guild: { id: guild.id } })}">${esc(guild.name)}</a><span class="sep" aria-hidden="true">›</span><span aria-current="page">${esc(playerName)}</span>`
+    : `<span aria-current="page">${esc(guild.name)}</span>`;
   return `<section class="report-head">
     <div class="report-title">
-      <nav class="crumbs" aria-label="Breadcrumb"><span aria-current="page">${esc(guild.name)}</span></nav>
+      <nav class="crumbs" aria-label="Breadcrumb">${crumbs}</nav>
       <p class="muted">${where}</p>
     </div>
     <div class="head-actions">
@@ -1362,16 +1368,17 @@ function guildTilesHtml(t) {
 
 const TEAM_ROLES = [['tank', 'Tanks'], ['healer', 'Healers'], ['dps', 'DPS'], ['unknown', 'Role unknown']];
 
-function raidTeamHtml(team, roster) {
+// trendHref(name): the player's trend page.
+function raidTeamHtml(team, roster, trendHref) {
   const size = TEAM_ROLES.reduce((n, [role]) => n + team[role].length, 0);
   if (!size) return '';
-  const member = (p) => `<li class="team-member" style="--cls:${classColor(p.className)}" title="${esc([p.spec, p.className].filter(Boolean).join(' '))}">
+  const member = (p) => `<li><a class="team-member" href="${trendHref(p.name)}" style="--cls:${classColor(p.className)}" title="${esc([p.spec, p.className].filter(Boolean).join(' '))} · their trend across nights">
     <img class="spec-icon" src="${specIcon(p.className, p.spec)}" alt="" loading="lazy" data-optional>
     <span class="player">${esc(p.name)}</span>
     <span class="team-att">${roster.total ? `${Math.round(p.pct * 100)}%` : ''}</span>
-  </li>`;
+  </a></li>`;
   return `<section class="card raid-team"><h2>Raid team <span class="muted">${size}</span></h2>
-    <p class="hint">Everyone in at least one of the last 3 raids, with the spec they played most in the latest reports. The % is attendance.</p>
+    <p class="hint">Everyone in at least one of the last 3 raids, with the spec they played most in the latest reports. The % is attendance. Pick a player for their trend across nights.</p>
     <div class="team-roles">${TEAM_ROLES.filter(([role]) => team[role].length).map(([role, label]) => `<div class="team-role role-${role}">
       <h3>${label} <span class="muted">${team[role].length}</span></h3>
       <ul class="team-list">${team[role].map(member).join('')}</ul>
@@ -1385,11 +1392,12 @@ const ROSTER_STATUS = {
   idle: ['idle', 'Not raiding'],
 };
 
-function rosterRow(p, total, hasMembers) {
+function rosterRow(p, total, hasMembers, trendHref) {
   const [cls, label] = ROSTER_STATUS[p.status];
   const raided = p.present + p.benched;
+  const name = `<span class="player" style="--cls:${classColor(p.className)}">${esc(p.name)}</span>`;
   return `<tr>
-    <td><span class="player" style="--cls:${classColor(p.className)}">${esc(p.name)}</span>
+    <td>${p.present ? `<a class="player-link" href="${trendHref(p.name)}" title="Their trend across nights">${name}</a>` : name}
       ${hasMembers && !p.member ? '<span class="muted">· not in guild</span>' : ''}</td>
     <td class="muted">${esc(p.className || '')}</td>
     <td class="muted">${p.rank == null ? '' : p.rank === 0 ? 'Guild Master' : `Rank ${Number(p.rank)}`}</td>
@@ -1400,7 +1408,7 @@ function rosterRow(p, total, hasMembers) {
   </tr>`;
 }
 
-function rosterHtml(roster) {
+function rosterHtml(roster, trendHref) {
   if (!roster.rows.length) {
     return '<section class="card"><p class="muted">No roster available: Warcraft Logs shared neither a member list nor attendance for this guild.</p></section>';
   }
@@ -1419,9 +1427,9 @@ function rosterHtml(roster) {
     ${roster.composition.length ? `<div class="composition">${roster.composition.map(([name, n]) => `<span class="comp-chip" style="--cls:${classColor(name)}">
       <span class="player">${esc(name || 'Unknown')}</span> ${n}</span>`).join('')}</div>` : ''}
     ${roster.hasMembers ? '' : '<p class="hint">Warcraft Logs didn\'t share this guild\'s member list, so the roster only shows people seen in its raids.</p>'}
-    ${active.length ? `<table class="table roster">${head}<tbody>${active.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table>` : ''}
+    ${active.length ? `<table class="table roster">${head}<tbody>${active.map((p) => rosterRow(p, roster.total, roster.hasMembers, trendHref)).join('')}</tbody></table>` : ''}
     ${idle.length ? `<details class="idle-members"><summary>${idle.length} member${idle.length === 1 ? '' : 's'} not in these raids</summary>
-      <table class="table roster">${head}<tbody>${idle.map((p) => rosterRow(p, roster.total, roster.hasMembers)).join('')}</tbody></table></details>` : ''}
+      <table class="table roster">${head}<tbody>${idle.map((p) => rosterRow(p, roster.total, roster.hasMembers, trendHref)).join('')}</tbody></table></details>` : ''}
     <p class="hint">From Warcraft Logs' attendance tracking across the guild's ${roster.total} logged raids, counted from each player's first raid. Benched counts as attended.
       "Lapsed" means they raided before but not in the last 3.</p>
   </section>`;
@@ -1467,6 +1475,7 @@ async function renderGuild(r) {
   const roster = buildRoster(attendance, members);
   const team = buildRaidTeam(roster, sightings);
   const unloaded = list.length - withFights.length;
+  const trendHref = (name) => guildHref({ host: r.host, guild: { id: guild.id }, playerName: name });
 
   view.innerHTML = `
     ${guildHeader(r, guild)}
@@ -1476,17 +1485,155 @@ async function renderGuild(r) {
       ${raidTimelineHtml(groupByExpansion(history.progress, expansions), tierZones)}
       ${unloaded ? `<p class="hint">Boss pulls are loaded for ${withFights.length} of ${list.length} logs. Older raids fill in on later visits as your
         Warcraft Logs API budget allows (it depends on your Warcraft Logs subscription).</p>` : ''}
-      ${raidTeamHtml(team, roster)}
+      ${raidTeamHtml(team, roster, trendHref)}
       ${progressionHtml(r, current)}
       ${progressCurvesHtml(r, current)}` },
     { id: 'nights', label: 'Raid nights', count: list.length, html: nightsHtml(r, list, new Map(history.nights.map((n) => [n.code, n])), limit) },
-    { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster) },
+    { id: 'roster', label: 'Roster', count: roster.counts.raiding, html: rosterHtml(roster, trendHref) },
   ]) : '<section class="card notice"><p>No public reports found for this guild.</p></section>'}
     ${rawBlock('guild', guild)}${rawBlock('reports', list)}${rawBlock('attendance', attendance)}${rawBlock('members', members?.members.slice(0, 20))}`;
 
   bindTabs();
   $('#guild-limit')?.addEventListener('change', (e) => { store.set('fl.guildLimit', Number(e.target.value)); render(); });
   $('#refresh').addEventListener('click', async () => { await clearReportCache(guildCachePrefix(guild.id)); render(); });
+}
+
+// ---------- player trend ----------
+
+const TREND_LIMITS = [4, 8, 12];
+// Like the guild page's history: older nights stop loading past this share of the hourly API budget.
+const TREND_BUDGET = 0.6;
+
+// One player across their recent raid nights, found from the guild's attendance. Per night it costs the log (often
+// cached), its deaths, one rankings query for the kills and the avoidable-damage events; logs a day old are cached
+// for good, so a second visit is close to free.
+async function renderGuildPlayer(r) {
+  setLoading('Loading guild…');
+  const guild = await fetchGuild(r.host, r.guild);
+  const name = r.playerName;
+  const saved = store.get('fl.trendNights');
+  const limit = TREND_LIMITS.includes(saved) ? saved : 8;
+
+  setLoading(`Finding ${name}'s raid nights…`);
+  const [attendance, { reports: list }] = await Promise.all([fetchGuildAttendance(r.host, guild.id), fetchGuildReportList(r.host, guild.id)]);
+  // Nights they raided (benched doesn't count), newest first; without attendance, the guild's logs in order.
+  const codes = attendance
+    ? attendance.filter((a) => (a.players || []).some((p) => p.name === name && p.presence === 1)).map((a) => a.code)
+    : list.map((x) => x.code);
+  const candidates = [...new Set(codes)].slice(0, limit + 4);
+
+  const nights = [];
+  let stopped = false;
+  for (const code of candidates) {
+    if (nights.length >= limit) break;
+    if (nights.length && overBudget(TREND_BUDGET)) { stopped = true; break; }
+    setLoading(`Loading ${name}'s raid nights… ${nights.length + 1} of ${Math.min(limit, candidates.length)}`);
+    try {
+      const report = await fetchReport(r.host, code);
+      const lk = buildLookups(report);
+      const actor = [...lk.actors.values()].find((a) => a.type === 'Player' && a.name === name);
+      const fightIDs = (report.fights || []).map((f) => f.id);
+      if (!actor || !fightIDs.length) continue;
+      const kills = report.fights.filter((f) => f.kill && (f.friendlyPlayers || []).includes(actor.id)).map((f) => f.id);
+      const tracked = trackedNames(report.fights.map((f) => f.name));
+      const [deathEvents, rankings, mech] = await Promise.all([
+        fetchDeaths(r.host, code, fightIDs),
+        fetchReportRankings(r.host, code, kills),
+        tracked.avoid.length ? fetchMechanicEvents(r.host, code, fightIDs, { avoid: tracked.avoid }) : null,
+      ]);
+      nights.push({ ...nightStats({ report, lk, pid: actor.id, deaths: playerDeaths(deathEvents, lk), rankings, mech }), className: actor.subType });
+    } catch (err) {
+      if (err instanceof AuthError) throw err;
+      if (err instanceof RateLimitError) { stopped = true; break; }
+      // A log that's private or gone: skip it.
+    }
+  }
+
+  const head = guildHeader(r, guild, name);
+  if (!nights.length) {
+    view.innerHTML = `${head}<section class="card notice"><p>${stopped
+      ? 'Your Warcraft Logs API budget for this hour is used up, so no raid nights could be loaded. Try again after it resets.'
+      : `No raid nights found for ${esc(name)} in ${esc(guild.name)}'s recent logs.`}</p></section>`;
+    bindRefreshGuild(guild);
+    return;
+  }
+
+  const t = playerTrend(nights);
+  const s = t.summary;
+  const latest = t.nights[t.nights.length - 1];
+  const role = [...t.nights].reverse().find((n) => n.role)?.role;
+  const stat = (label, value, cls = '') => `<div class="stat ${cls}"><span class="stat-val">${value}</span><span class="stat-label">${esc(label)}</span></div>`;
+  const per = (v, digits = 2) => (v == null ? '–' : v.toFixed(digits));
+  const stats = [
+    stat('Raid nights', String(s.nights)),
+    stat('Boss kills', String(s.kills)),
+    s.avgParse != null ? stat('Average parse', String(Math.round(s.avgParse)), `parse-${parseTier(s.avgParse)}`) : '',
+    stat('Deaths per pull', per(s.deathsPerPull)),
+    s.avoidPerPull != null ? stat('Avoidable hits per pull', per(s.avoidPerPull, 1)) : '',
+  ].join('');
+
+  const nightHref = (n) => href({ code: n.code, host: r.host, player: n.pid });
+  const chart = nightsChart(t.nights.map((n) => ({
+    label: fmtDay(n.start),
+    value: n.avgParse,
+    title: n.avgParse == null ? `${fmtDay(n.start)}: no ranked kills` : `${fmtDay(n.start)}: average parse ${Math.round(n.avgParse)} over ${n.bosses.filter((b) => b.parse != null).length} kill(s)`,
+    href: nightHref(n),
+  })), { label: `${name}'s average parse per raid night` });
+
+  const nightRows = [...t.nights].reverse().map((n) => `<tr>
+    <td class="muted">${esc(fmtDay(n.start, { weekday: 'short' }))}</td>
+    <td><a href="${nightHref(n)}">${esc(n.title || n.code)}</a></td>
+    <td class="muted">${esc(n.zone)}</td>
+    <td class="num">${n.pulls}</td><td class="num">${n.kills}</td>
+    <td class="num ${n.deaths ? 'no' : ''}">${n.deaths}</td>
+    <td class="num">${n.avoid ?? '<span class="muted">–</span>'}</td>
+    <td class="num">${parseBadge(n.avgParse)}</td><td class="num">${parseBadge(n.bestParse)}</td>
+  </tr>`).join('');
+
+  const amountLabel = role === 'healer' ? 'HPS' : 'DPS';
+  const bossRows = t.bosses.map((b) => `<tr><td>${esc(b.name)}</td>${t.nights.map((n) => {
+    const x = b.byNight.get(n.code);
+    if (!x) return '<td class="num muted">·</td>';
+    return `<td class="num" title="${esc(`${fmtDay(n.start)}: ${x.parse == null ? 'not ranked' : `parse ${Math.round(x.parse)}`}${x.amount ? `, ${fmtNum(x.amount)} ${amountLabel}` : ''}`)}">
+      <a href="${href({ code: n.code, host: r.host, fight: x.fightId, player: n.pid })}">${parseBadge(x.parse)}</a></td>`;
+  }).join('')}</tr>`).join('');
+
+  view.innerHTML = `
+    ${head}
+    <section class="card fight-head">
+      <div>
+        <h2><span class="player" style="--cls:${classColor(latest.className)}">${esc(name)}</span> <span class="muted">${esc(latest.className || '')}${role ? ` · ${esc(ROLE_LABEL[role])}` : ''}</span></h2>
+        <p class="fight-meta muted">Their last ${t.nights.length} raid night${t.nights.length === 1 ? '' : 's'} with ${esc(guild.name)}, ${esc(fmtDay(t.nights[0].start))} to ${esc(fmtDay(latest.start))}</p>
+      </div>
+      <label class="select-label">Nights
+        <select id="trend-limit">${TREND_LIMITS.map((n) => `<option value="${n}"${n === limit ? ' selected' : ''}>${n}</option>`).join('')}</select>
+      </label>
+    </section>
+    <section class="stats">${stats}</section>
+    <section class="card"><h2>Trend</h2>
+      ${t.highlights.length ? `<ul class="tips">${t.highlights.map((h) => `<li class="tip ${h.level}"><span class="tip-icon">${TIP_ICONS[h.level]}</span><span>${esc(h.text)}</span></li>`).join('')}</ul>`
+        : '<p class="muted">Not enough nights yet to see a trend.</p>'}
+      ${stopped ? `<p class="hint">Loaded ${t.nights.length} of the nights you asked for before reaching your hourly API budget. The rest load on a later visit.</p>` : ''}
+    </section>
+    ${chart ? `<section class="card"><h2>Average parse per night</h2>${chart}<p class="hint">Pick a point for that night's breakdown.</p></section>` : ''}
+    <section class="card"><h2>Raid nights</h2>
+      <table class="table"><thead><tr><th>Date</th><th>Log</th><th>Raid</th><th class="num">Pulls</th><th class="num">Kills</th>
+        <th class="num">Deaths</th><th class="num">Avoidable hits</th><th class="num">Avg parse</th><th class="num">Best</th></tr></thead>
+      <tbody>${nightRows}</tbody></table>
+      <p class="hint">Avoidable hits only count bosses with a mechanics list. Pick a log for that night's breakdown.</p>
+    </section>
+    ${bossRows ? `<section class="card"><h2>Parse by boss</h2>
+      <table class="table trend-bosses"><thead><tr><th>Boss</th>${t.nights.map((n) => `<th class="num">${esc(fmtDay(n.start))}</th>`).join('')}</tr></thead>
+      <tbody>${bossRows}</tbody></table>
+      <p class="hint">Kills only. Hover a parse for their ${amountLabel}; pick it for that kill's breakdown.</p>
+    </section>` : ''}
+    ${rawBlock('trend nights', t.nights)}`;
+  bindRefreshGuild(guild);
+  $('#trend-limit')?.addEventListener('change', (e) => { store.set('fl.trendNights', Number(e.target.value)); render(); });
+}
+
+function bindRefreshGuild(guild) {
+  $('#refresh')?.addEventListener('click', async () => { await clearReportCache(guildCachePrefix(guild.id)); render(); });
 }
 
 // ---------- boot ----------
@@ -1498,7 +1645,8 @@ async function render() {
   try {
     if (!r.code && !r.guild) { renderHome(); return; }
     if (!getToken()) throw new AuthError('Connect your Warcraft Logs account to load reports.');
-    if (r.guild) await renderGuild(r);
+    if (r.guild && r.playerName) await renderGuildPlayer(r);
+    else if (r.guild) await renderGuild(r);
     else if (r.fight != null && (r.compare != null || r.code2)) await renderCompare(r);
     else if (r.fight != null && r.player != null) await renderPlayer(r);
     else if (r.player != null) await renderNightPlayer(r);
