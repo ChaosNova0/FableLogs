@@ -3,3 +3,7 @@ _site/
 *.log
 Thumbs.db
 desktop.ini
+
+# Claude Code project files: kept on this PC, not on GitHub
+.claude/
+CLAUDE.md
